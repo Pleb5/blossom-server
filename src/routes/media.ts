@@ -53,6 +53,7 @@ import type { BlossomVariables } from "../middleware/auth.ts";
 import { debug } from "../middleware/debug.ts";
 import { errorResponse } from "../middleware/errors.ts";
 import { optimizeMedia } from "../optimize/index.ts";
+import { extractDimensions } from "../optimize/dimensions.ts";
 import { getFileRule } from "../prune/rules.ts";
 import type { IBlobStorage } from "../storage/interface.ts";
 import { getBaseUrl, getBlobUrl } from "../utils/url.ts";
@@ -70,6 +71,8 @@ interface BlobDescriptor {
   size: number;
   type: string;
   uploaded: number;
+  /** Pixel dimensions "<width>x<height>" — present only for images/videos. */
+  dim?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -447,6 +450,7 @@ export function buildMediaRouter(
               size: existing.size,
               type: existing.type ?? "application/octet-stream",
               uploaded: existing.uploaded,
+              ...(existing.dim ? { dim: existing.dim } : {}),
             } satisfies BlobDescriptor,
             201,
           );
@@ -528,6 +532,7 @@ export function buildMediaRouter(
               size: existing.size,
               type: existing.type ?? "application/octet-stream",
               uploaded: existing.uploaded,
+              ...(existing.dim ? { dim: existing.dim } : {}),
             } satisfies BlobDescriptor,
             201,
           );
@@ -537,6 +542,16 @@ export function buildMediaRouter(
       // --- 17. Commit optimized file to storage ---
       // For local: atomic rename. For S3: stream optimized file to bucket, delete local copy.
       // commitFile() handles dedup internally (no-op if blob already exists).
+      //
+      // Extract pixel dimensions from the optimized file *before* commit —
+      // commitFile() consumes optPath (rename for local, upload+delete for S3).
+      // Best-effort: null on any failure.
+      const optimizedType = optimizedMime !== "application/octet-stream"
+        ? optimizedMime
+        : null;
+      const dim = await extractDimensions(optPath, optimizedType);
+      debug(debugPrefix, `dim=${dim ?? "none"}`);
+
       try {
         await storage.commitFile(optPath, optimizedHash, optimizedExt);
       } catch (err) {
@@ -550,10 +565,9 @@ export function buildMediaRouter(
       const blobRecord = {
         sha256: optimizedHash,
         size: optimizedSize,
-        type: optimizedMime !== "application/octet-stream"
-          ? optimizedMime
-          : null,
+        type: optimizedType,
         uploaded: now,
+        dim,
       };
       await insertBlob(db, blobRecord, auth?.pubkey ?? "anonymous");
       await insertMediaDerivative(db, originalHash, optimizedHash);
@@ -571,6 +585,7 @@ export function buildMediaRouter(
           size: optimizedSize,
           type: blobRecord.type ?? "application/octet-stream",
           uploaded: now,
+          ...(dim ? { dim } : {}),
         } satisfies BlobDescriptor,
         201,
       );

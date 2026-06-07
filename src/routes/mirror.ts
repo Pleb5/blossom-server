@@ -45,6 +45,7 @@ import type { Config } from "../config/schema.ts";
 import { mimeToExt } from "../utils/mime.ts";
 import { getBaseUrl, getBlobUrl } from "../utils/url.ts";
 import { getFileRule } from "../prune/rules.ts";
+import { extractDimensions } from "../optimize/dimensions.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -57,6 +58,8 @@ interface BlobDescriptor {
   size: number;
   type: string;
   uploaded: number;
+  /** Pixel dimensions "<width>x<height>" — present only for images/videos. */
+  dim?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -500,6 +503,7 @@ export function buildMirrorRouter(
             size: existing.size,
             type: existing.type ?? "application/octet-stream",
             uploaded: existing.uploaded,
+            ...(existing.dim ? { dim: existing.dim } : {}),
           } satisfies BlobDescriptor,
         );
       }
@@ -507,6 +511,13 @@ export function buildMirrorRouter(
 
     // --- 15. Commit: move verified tmp file to final storage location ---
     // For local: atomic rename. For S3: stream to bucket, delete local tmp.
+    //
+    // Extract pixel dimensions from the verified temp file *before* commit —
+    // commitWrite() consumes session.tmpPath. Best-effort: null on failure.
+    const blobType = mimeType !== "application/octet-stream" ? mimeType : null;
+    const dim = await extractDimensions(session.tmpPath, blobType);
+    debug(debugPrefix, `dim=${dim ?? "none"}`);
+
     debug(debugPrefix, `commitWrite start hash=${hash} ext=${ext}`);
     const t2 = Date.now();
     try {
@@ -523,8 +534,9 @@ export function buildMirrorRouter(
     const blobRecord = {
       sha256: hash,
       size,
-      type: mimeType !== "application/octet-stream" ? mimeType : null,
+      type: blobType,
       uploaded: now,
+      dim,
     };
     debug(debugPrefix, `insertBlob start hash=${hash}`);
     const t4 = Date.now();
@@ -547,6 +559,7 @@ export function buildMirrorRouter(
         size,
         type: blobRecord.type ?? "application/octet-stream",
         uploaded: now,
+        ...(dim ? { dim } : {}),
       } satisfies BlobDescriptor,
     );
   });

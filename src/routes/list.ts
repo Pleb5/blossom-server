@@ -32,6 +32,8 @@ interface BlobDescriptor {
   size: number;
   type: string;
   uploaded: number;
+  /** Pixel dimensions "<width>x<height>" — present only for images/videos. */
+  dim?: string;
 }
 
 export function buildListRouter(
@@ -138,6 +140,7 @@ export function buildListRouter(
       size: b.size,
       type: b.type ?? "application/octet-stream",
       uploaded: b.uploaded,
+      ...(b.dim ? { dim: b.dim } : {}),
     }));
 
     return ctx.json(descriptors);

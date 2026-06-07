@@ -77,6 +77,11 @@ export function buildBlobsRouter(
       ETag: `"${hash}"`,
       "Last-Modified": new Date(blob.uploaded * 1000).toUTCString(),
     };
+    // Expose pixel dimensions for images/videos when known (non-standard,
+    // mirrors the BUD descriptor `dim` field "<width>x<height>").
+    if (blob.dim) {
+      headers["X-Dimensions"] = blob.dim;
+    }
 
     // Conditional request: If-None-Match (RFC 9110 §13.1.2)
     // The SHA-256 hash is a perfect ETag — content-addressed, immutable, already computed.
