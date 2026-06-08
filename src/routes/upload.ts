@@ -37,6 +37,7 @@ import type { IBlobStorage } from "../storage/interface.ts";
 import { getPool, WorkerJobError } from "../workers/pool.ts";
 import type { Config } from "../config/schema.ts";
 import { mimeToExt } from "../utils/mime.ts";
+import { nip94Fields, type Nip94Tag } from "../utils/nip94.ts";
 import { getBaseUrl, getBlobUrl } from "../utils/url.ts";
 import { getFileRule } from "../prune/rules.ts";
 import { extractDimensions } from "../optimize/dimensions.ts";
@@ -48,8 +49,8 @@ interface BlobDescriptor {
   size: number;
   type: string;
   uploaded: number;
-  /** Pixel dimensions "<width>x<height>" — present only for images/videos. */
-  dim?: string;
+  /** Additional NIP-94 file metadata tags. */
+  nip94?: Nip94Tag[];
 }
 
 export function buildUploadRouter(
@@ -278,14 +279,22 @@ export function buildUploadRouter(
           await insertBlob(db, existing, auth.pubkey);
         }
         const baseUrl = getBaseUrl(ctx.req.raw, config.publicDomain);
+        const url = getBlobUrl(existing.sha256, existing.type, baseUrl);
+        const type = existing.type ?? "application/octet-stream";
         return ctx.json(
           {
-            url: getBlobUrl(existing.sha256, existing.type, baseUrl),
+            url,
             sha256: existing.sha256,
             size: existing.size,
-            type: existing.type ?? "application/octet-stream",
+            type,
             uploaded: existing.uploaded,
-            ...(existing.dim ? { dim: existing.dim } : {}),
+            ...nip94Fields({
+              url,
+              sha256: existing.sha256,
+              size: existing.size,
+              type,
+              dim: existing.dim,
+            }),
           } satisfies BlobDescriptor,
         );
       }
@@ -431,14 +440,16 @@ export function buildUploadRouter(
       })`,
     );
     const baseUrl = getBaseUrl(ctx.req.raw, config.publicDomain);
+    const url = getBlobUrl(hash, blobRecord.type, baseUrl);
+    const type = blobRecord.type ?? "application/octet-stream";
     return ctx.json(
       {
-        url: getBlobUrl(hash, blobRecord.type, baseUrl),
+        url,
         sha256: hash,
         size,
-        type: blobRecord.type ?? "application/octet-stream",
+        type,
         uploaded: now,
-        ...(dim ? { dim } : {}),
+        ...nip94Fields({ url, sha256: hash, size, type, dim }),
       } satisfies BlobDescriptor,
       201,
     );

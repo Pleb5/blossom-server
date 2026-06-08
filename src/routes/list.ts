@@ -20,6 +20,7 @@ import { optionalAuth, requireAuth } from "../middleware/auth.ts";
 import type { BlossomVariables } from "../middleware/auth.ts";
 import { errorResponse } from "../middleware/errors.ts";
 import type { Config } from "../config/schema.ts";
+import { nip94Fields, type Nip94Tag } from "../utils/nip94.ts";
 import { getBaseUrl, getBlobUrl } from "../utils/url.ts";
 
 /** 64-character lowercase hex string — valid Nostr pubkey format */
@@ -32,8 +33,8 @@ interface BlobDescriptor {
   size: number;
   type: string;
   uploaded: number;
-  /** Pixel dimensions "<width>x<height>" — present only for images/videos. */
-  dim?: string;
+  /** Additional NIP-94 file metadata tags. */
+  nip94?: Nip94Tag[];
 }
 
 export function buildListRouter(
@@ -134,14 +135,24 @@ export function buildListRouter(
 
     // --- Build response ---
     const baseUrl = getBaseUrl(ctx.req.raw, config.publicDomain);
-    const descriptors: BlobDescriptor[] = blobs.map((b) => ({
-      url: getBlobUrl(b.sha256, b.type, baseUrl),
-      sha256: b.sha256,
-      size: b.size,
-      type: b.type ?? "application/octet-stream",
-      uploaded: b.uploaded,
-      ...(b.dim ? { dim: b.dim } : {}),
-    }));
+    const descriptors: BlobDescriptor[] = blobs.map((b) => {
+      const url = getBlobUrl(b.sha256, b.type, baseUrl);
+      const type = b.type ?? "application/octet-stream";
+      return {
+        url,
+        sha256: b.sha256,
+        size: b.size,
+        type,
+        uploaded: b.uploaded,
+        ...nip94Fields({
+          url,
+          sha256: b.sha256,
+          size: b.size,
+          type,
+          dim: b.dim,
+        }),
+      };
+    });
 
     return ctx.json(descriptors);
   });
