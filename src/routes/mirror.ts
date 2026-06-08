@@ -43,7 +43,11 @@ import type { IBlobStorage } from "../storage/interface.ts";
 import { getPool } from "../workers/pool.ts";
 import type { Config } from "../config/schema.ts";
 import { mimeToExt } from "../utils/mime.ts";
-import { nip94Fields, type Nip94Tag } from "../utils/nip94.ts";
+import {
+  nip94Fields,
+  type Nip94Tag,
+  persistedNip94Tags,
+} from "../utils/nip94.ts";
 import { getBaseUrl, getBlobUrl } from "../utils/url.ts";
 import { getFileRule } from "../prune/rules.ts";
 import { extractDimensions } from "../optimize/dimensions.ts";
@@ -511,7 +515,7 @@ export function buildMirrorRouter(
               sha256: existing.sha256,
               size: existing.size,
               type,
-              dim: existing.dim,
+              tags: existing.nip94,
             }),
           } satisfies BlobDescriptor,
         );
@@ -545,7 +549,7 @@ export function buildMirrorRouter(
       size,
       type: blobType,
       uploaded: now,
-      dim,
+      nip94: persistedNip94Tags({ dim }),
     };
     debug(debugPrefix, `insertBlob start hash=${hash}`);
     const t4 = Date.now();
@@ -570,7 +574,13 @@ export function buildMirrorRouter(
         size,
         type,
         uploaded: now,
-        ...nip94Fields({ url, sha256: hash, size, type, dim }),
+        ...nip94Fields({
+          url,
+          sha256: hash,
+          size,
+          type,
+          tags: blobRecord.nip94,
+        }),
       } satisfies BlobDescriptor,
     );
   });

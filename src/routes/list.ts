@@ -149,7 +149,7 @@ export function buildListRouter(
           sha256: b.sha256,
           size: b.size,
           type,
-          dim: b.dim,
+          tags: b.nip94,
         }),
       };
     });

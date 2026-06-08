@@ -56,7 +56,11 @@ import { optimizeMedia } from "../optimize/index.ts";
 import { extractDimensions } from "../optimize/dimensions.ts";
 import { getFileRule } from "../prune/rules.ts";
 import type { IBlobStorage } from "../storage/interface.ts";
-import { nip94Fields, type Nip94Tag } from "../utils/nip94.ts";
+import {
+  nip94Fields,
+  type Nip94Tag,
+  persistedNip94Tags,
+} from "../utils/nip94.ts";
 import { getBaseUrl, getBlobUrl } from "../utils/url.ts";
 import { getPool, WorkerJobError } from "../workers/pool.ts";
 import type { Config } from "../config/schema.ts";
@@ -458,8 +462,7 @@ export function buildMediaRouter(
                 sha256: existing.sha256,
                 size: existing.size,
                 type,
-                dim: existing.dim,
-                originalSha256: originalHash,
+                tags: [...(existing.nip94 ?? []), ["ox", originalHash]],
               }),
             } satisfies BlobDescriptor,
             201,
@@ -549,8 +552,7 @@ export function buildMediaRouter(
                 sha256: existing.sha256,
                 size: existing.size,
                 type,
-                dim: existing.dim,
-                originalSha256: originalHash,
+                tags: [...(existing.nip94 ?? []), ["ox", originalHash]],
               }),
             } satisfies BlobDescriptor,
             201,
@@ -586,7 +588,7 @@ export function buildMediaRouter(
         size: optimizedSize,
         type: optimizedType,
         uploaded: now,
-        dim,
+        nip94: persistedNip94Tags({ dim, originalSha256: originalHash }),
       };
       await insertBlob(db, blobRecord, auth?.pubkey ?? "anonymous");
       await insertMediaDerivative(db, originalHash, optimizedHash);
@@ -611,8 +613,7 @@ export function buildMediaRouter(
             sha256: optimizedHash,
             size: optimizedSize,
             type,
-            dim,
-            originalSha256: originalHash,
+            tags: blobRecord.nip94,
           }),
         } satisfies BlobDescriptor,
         201,

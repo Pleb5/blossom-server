@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { nip94Fields } from "../../src/utils/nip94.ts";
+import { nip94Fields, persistedNip94Tags } from "../../src/utils/nip94.ts";
 
 Deno.test("nip94Fields: emits core file metadata tags", () => {
   const fields = nip94Fields({
@@ -17,14 +17,28 @@ Deno.test("nip94Fields: emits core file metadata tags", () => {
   ]);
 });
 
-Deno.test("nip94Fields: emits optional ox and dim tags", () => {
+Deno.test("persistedNip94Tags: emits optional ox and dim tags", () => {
+  const tags = persistedNip94Tags({
+    originalSha256: "c".repeat(64),
+    dim: "640x480",
+  });
+
+  assertEquals(tags, [
+    ["ox", "c".repeat(64)],
+    ["dim", "640x480"],
+  ]);
+});
+
+Deno.test("nip94Fields: appends persisted tags after core tags", () => {
   const fields = nip94Fields({
     url: "https://cdn.example.com/optimized.webp",
     sha256: "b".repeat(64),
     size: 5678,
     type: "image/webp",
-    originalSha256: "c".repeat(64),
-    dim: "640x480",
+    tags: [
+      ["ox", "c".repeat(64)],
+      ["dim", "640x480"],
+    ],
   });
 
   assertEquals(fields.nip94, [

@@ -5,8 +5,7 @@ export interface Nip94Metadata {
   sha256: string;
   size: number;
   type: string;
-  dim?: string | null;
-  originalSha256?: string | null;
+  tags?: Nip94Tag[] | null;
 }
 
 export function nip94Fields(metadata: Nip94Metadata): { nip94: Nip94Tag[] } {
@@ -17,8 +16,17 @@ export function nip94Fields(metadata: Nip94Metadata): { nip94: Nip94Tag[] } {
     ["size", String(metadata.size)],
   ];
 
-  if (metadata.originalSha256) tags.push(["ox", metadata.originalSha256]);
-  if (metadata.dim) tags.push(["dim", metadata.dim]);
+  if (metadata.tags) tags.push(...metadata.tags);
 
   return { nip94: tags };
+}
+
+export function persistedNip94Tags(metadata: {
+  dim?: string | null;
+  originalSha256?: string | null;
+}): Nip94Tag[] | null {
+  const tags: Nip94Tag[] = [];
+  if (metadata.originalSha256) tags.push(["ox", metadata.originalSha256]);
+  if (metadata.dim) tags.push(["dim", metadata.dim]);
+  return tags.length > 0 ? tags : null;
 }
