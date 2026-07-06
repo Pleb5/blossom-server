@@ -438,6 +438,93 @@ const ListSchema = z.object({
     ),
 });
 
+const NostrSchema = z.object({
+  indexerRelays: z
+    .array(z.string().url())
+    .default([
+      "wss://relay.damus.io",
+      "wss://relay.primal.net",
+      "wss://purplepag.es",
+    ])
+    .describe(
+      "Nostr relays used to discover community outbox relays and initial community definition events.",
+    ),
+  requestTimeoutMs: z
+    .number()
+    .int()
+    .min(1000)
+    .default(5_000)
+    .describe(
+      "Maximum time in milliseconds to wait for each Nostr relay request during community whitelist refresh.",
+    ),
+});
+
+const AccessCommunitySchema = z.object({
+  pubkey: z
+    .string()
+    .min(1)
+    .describe(
+      "Community identity as npub or 64-character hex pubkey. The server fetches its kind:10222 definition and derives access from referenced profile lists.",
+    ),
+  refreshIntervalMs: z
+    .number()
+    .int()
+    .min(60_000)
+    .default(300_000)
+    .describe(
+      "How often to refresh the community definition, community relays, profile lists, and person-ban moderation state. Default: 5 minutes.",
+    ),
+  includeAuthorities: z
+    .boolean()
+    .default(true)
+    .describe(
+      "Include the community admin and section profile-list owners in the derived whitelist.",
+    ),
+  applyPersonBans: z
+    .boolean()
+    .default(true)
+    .describe(
+      "Apply active community person bans when deriving the whitelist, matching Budabit moderation rules.",
+    ),
+});
+
+const AccessModeSchema = z.object({
+  requireCommunityWhitelist: z
+    .boolean()
+    .default(false)
+    .describe(
+      "Require the authenticated pubkey to be present in the derived community whitelist.",
+    ),
+});
+
+const AccessSchema = z
+  .object({
+    community: AccessCommunitySchema.optional().describe(
+      "Community-derived whitelist settings.",
+    ),
+    write: AccessModeSchema.optional()
+      .transform((v) => v ?? AccessModeSchema.parse({}))
+      .describe(
+        "Write permission settings for upload, mirror, and media endpoints.",
+      ),
+    read: AccessModeSchema.optional()
+      .transform((v) => v ?? AccessModeSchema.parse({}))
+      .describe("Read permission settings for blob and list endpoints."),
+  })
+  .superRefine((v, ctx) => {
+    if (
+      (v.write.requireCommunityWhitelist || v.read.requireCommunityWhitelist) &&
+      !v.community?.pubkey
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["community", "pubkey"],
+        message:
+          "access.community.pubkey is required when read or write community whitelist access is enabled.",
+      });
+    }
+  });
+
 const LandingSchema = z.object({
   enabled: z
     .boolean()
@@ -571,6 +658,12 @@ export const ConfigSchema = z
     list: ListSchema.optional()
       .transform((v) => v ?? ListSchema.parse({}))
       .describe("List endpoint settings (BUD-02). Disabled by default."),
+    nostr: NostrSchema.optional()
+      .transform((v) => v ?? NostrSchema.parse({}))
+      .describe("Nostr relay lookup settings."),
+    access: AccessSchema.optional()
+      .transform((v) => v ?? AccessSchema.parse({}))
+      .describe("Read/write access-control settings."),
     landing: LandingSchema.optional()
       .transform((v) => v ?? LandingSchema.parse({}))
       .describe("Landing page settings."),
@@ -607,5 +700,7 @@ export type StorageRule = z.infer<typeof StorageRuleSchema>;
 export type ReportConfig = z.infer<typeof ReportSchema>;
 export type ImageOptimizeConfig = z.infer<typeof ImageOptimizeSchema>;
 export type VideoOptimizeConfig = z.infer<typeof VideoOptimizeSchema>;
+export type NostrConfig = z.infer<typeof NostrSchema>;
+export type AccessConfig = z.infer<typeof AccessSchema>;
 export type ThumbnailConfig = z.infer<typeof ThumbnailSchema>;
 export type MediaConfig = z.infer<typeof MediaSchema>;

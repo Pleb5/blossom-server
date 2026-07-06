@@ -11,21 +11,26 @@
  */
 
 import { Hono } from "@hono/hono";
+import { HTTPException } from "@hono/hono/http-exception";
 import type { Client } from "@libsql/client";
 import type { IBlobStorage } from "../storage/interface.ts";
 import { getBlob, touchBlob } from "../db/blobs.ts";
-import { optionalAuth } from "../middleware/auth.ts";
+import { optionalAuth, requireAuth } from "../middleware/auth.ts";
 import type { BlossomVariables } from "../middleware/auth.ts";
 import { errorResponse } from "../middleware/errors.ts";
 import type { Config } from "../config/schema.ts";
 import { mimeToExt } from "../utils/mime.ts";
+import {
+  requireCommunityWhitelist,
+  requiresCommunityWhitelist,
+} from "../access/guard.ts";
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
 
 export function buildBlobsRouter(
   db: Client,
   storage: IBlobStorage,
-  _config: Config,
+  config: Config,
 ): Hono<{ Variables: BlossomVariables }> {
   const app = new Hono<{ Variables: BlossomVariables }>();
 
@@ -42,11 +47,28 @@ export function buildBlobsRouter(
       return next();
     }
 
-    // Optional auth enforcement for private blobs (config-gated, not implemented in v1)
-    // BUD-11: servers MAY require auth for GET — we make it configurable
-    // For now: if requireAuth is set on upload, GET is public (common case)
-    // Future: add config.get.requireAuth
-    const _auth = optionalAuth(ctx);
+    let auth: ReturnType<typeof optionalAuth>;
+    if (requiresCommunityWhitelist(config, "read")) {
+      try {
+        auth = requireAuth(ctx, "get");
+      } catch (err) {
+        if (err instanceof HTTPException) {
+          return errorResponse(ctx, err.status as 401 | 403, err.message);
+        }
+        throw err;
+      }
+    } else {
+      auth = optionalAuth(ctx);
+    }
+
+    const accessError = await requireCommunityWhitelist(
+      ctx,
+      db,
+      config,
+      "read",
+      auth,
+    );
+    if (accessError) return accessError;
 
     // Lookup metadata — DB is the index; type column tells us the on-disk extension
     const blob = await getBlob(db, hash);

@@ -40,6 +40,10 @@ import { mimeToExt } from "../utils/mime.ts";
 import { type Nip94Tag, nip94Tags, optionalNip94Tags } from "../utils/nip94.ts";
 import { getBaseUrl, getBlobUrl } from "../utils/url.ts";
 import { getFileRule } from "../prune/rules.ts";
+import {
+  requireCommunityWhitelist,
+  requiresCommunityWhitelist,
+} from "../access/guard.ts";
 import { extractDimensions } from "../optimize/dimensions.ts";
 
 /** BUD-02 Blob Descriptor */
@@ -72,15 +76,31 @@ export function buildUploadRouter(
       return errorResponse(ctx, 403, "Uploads are disabled on this server");
     }
 
-    if (config.upload.requireAuth) {
+    let auth: ReturnType<typeof requireAuth> | undefined;
+    if (
+      config.upload.requireAuth || requiresCommunityWhitelist(config, "write")
+    ) {
       try {
-        requireAuth(ctx, "upload");
+        auth = requireAuth(ctx, "upload");
       } catch (err) {
         if (err instanceof HTTPException) {
           return errorResponse(ctx, err.status as 401 | 403, err.message);
         }
         throw err;
       }
+    } else {
+      auth = ctx.get("auth");
+    }
+
+    const accessError = await requireCommunityWhitelist(
+      ctx,
+      db,
+      config,
+      "write",
+      auth,
+    );
+    if (accessError) {
+      return accessError;
     }
 
     const xSha256 = ctx.req.header("x-sha-256");
@@ -108,7 +128,7 @@ export function buildUploadRouter(
     // --- Storage rule check (preflight) ---
     // storage.rules is the upload gate. auth may not be populated for HEAD
     // (auth is optional in preflight), so pass pubkey only when available.
-    const preflightPubkey = ctx.get("auth")?.pubkey;
+    const preflightPubkey = auth?.pubkey;
     const rule = getFileRule(
       { mimeType: xContentType, pubkey: preflightPubkey },
       config.storage.rules,
@@ -157,7 +177,9 @@ export function buildUploadRouter(
 
     // --- 1. Auth ---
     let auth: ReturnType<typeof requireAuth> | undefined;
-    if (config.upload.requireAuth) {
+    if (
+      config.upload.requireAuth || requiresCommunityWhitelist(config, "write")
+    ) {
       try {
         auth = requireAuth(ctx, "upload");
       } catch (err) {
@@ -168,6 +190,26 @@ export function buildUploadRouter(
         }
         throw err;
       }
+    } else {
+      auth = ctx.get("auth");
+    }
+
+    const accessError = await requireCommunityWhitelist(
+      ctx,
+      db,
+      config,
+      "write",
+      auth,
+    );
+    if (accessError) {
+      await ctx.req.raw.body?.cancel();
+      debug(
+        debugPrefix,
+        `rejected: community access failed — ${
+          accessError.headers.get("X-Reason") ?? accessError.status
+        }`,
+      );
+      return accessError;
     }
 
     debug(

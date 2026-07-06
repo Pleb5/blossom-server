@@ -46,6 +46,10 @@ import { mimeToExt } from "../utils/mime.ts";
 import { type Nip94Tag, nip94Tags, optionalNip94Tags } from "../utils/nip94.ts";
 import { getBaseUrl, getBlobUrl } from "../utils/url.ts";
 import { getFileRule } from "../prune/rules.ts";
+import {
+  requireCommunityWhitelist,
+  requiresCommunityWhitelist,
+} from "../access/guard.ts";
 import { extractDimensions } from "../optimize/dimensions.ts";
 
 // ---------------------------------------------------------------------------
@@ -132,7 +136,9 @@ export function buildMirrorRouter(
 
     // --- 2. BUD-11 auth (t="upload", same verb as PUT /upload per spec) ---
     let auth: ReturnType<typeof requireAuth> | undefined;
-    if (config.mirror.requireAuth) {
+    if (
+      config.mirror.requireAuth || requiresCommunityWhitelist(config, "write")
+    ) {
       try {
         auth = requireAuth(ctx, "upload");
       } catch (err) {
@@ -146,6 +152,24 @@ export function buildMirrorRouter(
     } else {
       // Auth is optional — capture it if present for owner registration
       auth = ctx.get("auth");
+    }
+
+    const accessError = await requireCommunityWhitelist(
+      ctx,
+      db,
+      config,
+      "write",
+      auth,
+    );
+    if (accessError) {
+      await ctx.req.raw.body?.cancel();
+      debug(
+        debugPrefix,
+        `rejected: community access failed — ${
+          accessError.headers.get("X-Reason") ?? accessError.status
+        }`,
+      );
+      return accessError;
     }
 
     // --- 3. Parse JSON body { url } ---

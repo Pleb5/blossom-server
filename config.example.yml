@@ -28,6 +28,23 @@ host: 0.0.0.0
 # publicDomain: "blobs.example.com"
 
 # ---------------------------------------------------------------------------
+# Nostr
+# ---------------------------------------------------------------------------
+
+nostr:
+  # Relays used to discover a community npub's NIP-65 outbox relays and to
+  # fetch the initial kind:10222 community definition. The kind:10222 event's
+  # own "r" tags are then used as the primary community relays for profile-list
+  # and moderation refreshes.
+  indexerRelays:
+    - wss://relay.damus.io
+    - wss://relay.primal.net
+    - wss://purplepag.es
+
+  # Per-relay request timeout during community whitelist refresh.
+  requestTimeoutMs: 5000
+
+# ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------
 
@@ -197,6 +214,37 @@ list:
   # When false, a user may only list their own blobs (unauthenticated requests
   # are rejected with 401 in that case).
   allowListOthers: true
+
+# ---------------------------------------------------------------------------
+# Access Control
+# ---------------------------------------------------------------------------
+
+access:
+  # Optional community-derived whitelist. Set this to a community npub/hex pubkey
+  # to derive allowed users from its latest kind:10222 definition.
+  #
+  # Refresh flow:
+  #   1. Fetch the community's NIP-65 relay list from nostr.indexerRelays.
+  #   2. Fetch the latest kind:10222 from indexer + outbox relays.
+  #   3. Use the kind:10222 "r" relays to fetch referenced profile lists and
+  #      person-ban moderation reports.
+  #   4. Persist the merged whitelist in the database.
+  #
+  # community:
+  #   pubkey: npub1...
+  #   refreshIntervalMs: 300000 # 5 minutes
+  #   includeAuthorities: true  # include community admin + profile-list owners
+  #   applyPersonBans: true     # apply Budabit person-ban moderation semantics
+  write:
+    # When true, upload, mirror, and media writes require a BUD-11 auth event
+    # whose pubkey is in the derived community whitelist.
+    requireCommunityWhitelist: false
+
+  read:
+    # When true, blob reads and list requests require a BUD-11 auth event whose
+    # pubkey is in the derived community whitelist. Most community media servers
+    # should leave reads public and gate writes only.
+    requireCommunityWhitelist: false
 
 # ---------------------------------------------------------------------------
 # Media optimisation  (BUD-05)

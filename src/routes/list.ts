@@ -22,6 +22,10 @@ import { errorResponse } from "../middleware/errors.ts";
 import type { Config } from "../config/schema.ts";
 import { type Nip94Tag, nip94Tags } from "../utils/nip94.ts";
 import { getBaseUrl, getBlobUrl } from "../utils/url.ts";
+import {
+  requireCommunityWhitelist,
+  requiresCommunityWhitelist,
+} from "../access/guard.ts";
 
 /** 64-character lowercase hex string — valid Nostr pubkey format */
 const HEX_PUBKEY_RE = /^[0-9a-f]{64}$/;
@@ -57,7 +61,7 @@ export function buildListRouter(
     // Always call optionalAuth first to capture any supplied credential.
     // If requireAuth is true, enforce it via requireAuth() which throws 401/403.
     let auth: ReturnType<typeof optionalAuth>;
-    if (config.list.requireAuth) {
+    if (config.list.requireAuth || requiresCommunityWhitelist(config, "read")) {
       try {
         auth = requireAuth(ctx, "list");
       } catch (err) {
@@ -69,6 +73,15 @@ export function buildListRouter(
     } else {
       auth = optionalAuth(ctx);
     }
+
+    const accessError = await requireCommunityWhitelist(
+      ctx,
+      db,
+      config,
+      "read",
+      auth,
+    );
+    if (accessError) return accessError;
 
     // --- Pubkey validation ---
     const pubkey = ctx.req.param("pubkey").toLowerCase();

@@ -21,6 +21,7 @@ import { S3Storage } from "./src/storage/s3.ts";
 import { initPool } from "./src/workers/pool.ts";
 import { buildApp } from "./src/server.ts";
 import { pruneStorage } from "./src/prune/prune.ts";
+import { startCommunityWhitelistRefresh } from "./src/access/refresh.ts";
 
 const configPath = Deno.args[0] ?? "config.yml";
 const config = await loadConfig(configPath);
@@ -108,6 +109,16 @@ if (config.dashboard.enabled) {
   console.log("  Admin:    ready");
 }
 
+// Start community whitelist refresh before serving so protected writes can use a
+// fresh list immediately when relays are reachable. Failures are logged and the
+// route guards fail closed until a successful refresh is persisted.
+const communityWhitelistRefresher = config.access.community?.pubkey
+  ? startCommunityWhitelistRefresh(db, config)
+  : undefined;
+if (communityWhitelistRefresher) {
+  await communityWhitelistRefresher.ready;
+}
+
 // Build Hono app (async — landing router loads the prebuilt client JS at startup).
 const app = await buildApp(db, storage, config);
 
@@ -186,6 +197,12 @@ const server = Deno.serve(
             ? `ready (user=${config.dashboard.username}) — http://${hostname}:${port}/admin`
             : "disabled"),
       );
+      console.log(
+        "  Access:  community whitelist    " +
+          (config.access.community?.pubkey
+            ? `active (write=${config.access.write.requireCommunityWhitelist}, read=${config.access.read.requireCommunityWhitelist})`
+            : "disabled"),
+      );
     },
   },
   app.fetch,
@@ -195,6 +212,7 @@ const server = Deno.serve(
 const shutdown = () => {
   console.log("\nShutting down...");
   if (pruneTimeout !== undefined) clearTimeout(pruneTimeout);
+  communityWhitelistRefresher?.stop();
   pool.shutdown();
   server.shutdown();
   db.close();

@@ -64,6 +64,10 @@ import { type Nip94Tag, nip94Tags, optionalNip94Tags } from "../utils/nip94.ts";
 import { getBaseUrl, getBlobUrl } from "../utils/url.ts";
 import { getPool, WorkerJobError } from "../workers/pool.ts";
 import type { Config } from "../config/schema.ts";
+import {
+  requireCommunityWhitelist,
+  requiresCommunityWhitelist,
+} from "../access/guard.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -273,7 +277,7 @@ export function buildMediaRouter(
 
   // Hono does not support HEAD-only routes directly; register as GET and
   // the framework strips the body automatically for HEAD requests.
-  app.get("/media", (ctx) => {
+  app.get("/media", async (ctx) => {
     // --- 1. Feature flag ---
     if (!config.media.enabled) {
       return errorResponse(
@@ -284,15 +288,31 @@ export function buildMediaRouter(
     }
 
     // --- 2. Auth ---
-    if (config.media.requireAuth) {
+    let auth: ReturnType<typeof requireAuth> | undefined;
+    if (
+      config.media.requireAuth || requiresCommunityWhitelist(config, "write")
+    ) {
       try {
-        requireAuth(ctx, "media");
+        auth = requireAuth(ctx, "media");
       } catch (err) {
         if (err instanceof HTTPException) {
           return errorResponse(ctx, err.status as 401 | 403, err.message);
         }
         throw err;
       }
+    } else {
+      auth = ctx.get("auth");
+    }
+
+    const accessError = await requireCommunityWhitelist(
+      ctx,
+      db,
+      config,
+      "write",
+      auth,
+    );
+    if (accessError) {
+      return accessError;
     }
 
     // --- 3. Pool availability ---
@@ -324,7 +344,7 @@ export function buildMediaRouter(
     if (xContentType) {
       const mimeType = xContentType.split(";")[0].trim();
       const mimeRule = getFileRule(
-        { mimeType, pubkey: ctx.get("auth")?.pubkey },
+        { mimeType, pubkey: auth?.pubkey },
         config.storage.rules,
         config.upload.requirePubkeyInRule,
       );
@@ -372,7 +392,9 @@ export function buildMediaRouter(
 
       // --- 2. Auth ---
       let auth: ReturnType<typeof requireAuth> | undefined;
-      if (config.media.requireAuth) {
+      if (
+        config.media.requireAuth || requiresCommunityWhitelist(config, "write")
+      ) {
         try {
           auth = requireAuth(ctx, "media");
         } catch (err) {
@@ -385,6 +407,24 @@ export function buildMediaRouter(
         }
       } else {
         auth = ctx.get("auth");
+      }
+
+      const accessError = await requireCommunityWhitelist(
+        ctx,
+        db,
+        config,
+        "write",
+        auth,
+      );
+      if (accessError) {
+        await ctx.req.raw.body?.cancel();
+        debug(
+          debugPrefix,
+          `rejected: community access failed — ${
+            accessError.headers.get("X-Reason") ?? accessError.status
+          }`,
+        );
+        return accessError;
       }
 
       debug(
