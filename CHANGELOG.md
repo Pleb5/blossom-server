@@ -1,5 +1,12 @@
 # blossom-server
 
+## 6.2.1
+
+### Patch Changes
+
+- Drain request bodies on `/upload` dedup hits instead of cancelling them so
+  large re-uploads can receive the successful 200 response reliably.
+
 ## 6.2.0
 
 ### Minor Changes
