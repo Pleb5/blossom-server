@@ -38,6 +38,7 @@ import { getPool, WorkerJobError } from "../workers/pool.ts";
 import type { Config } from "../config/schema.ts";
 import { mimeToExt } from "../utils/mime.ts";
 import { type Nip94Tag, nip94Tags, optionalNip94Tags } from "../utils/nip94.ts";
+import { drainBody } from "../utils/streams.ts";
 import { getBaseUrl, getBlobUrl } from "../utils/url.ts";
 import { getFileRule } from "../prune/rules.ts";
 import { extractDimensions } from "../optimize/dimensions.ts";
@@ -267,9 +268,12 @@ export function buildUploadRouter(
 
     // --- 6. Dedup: if blob already exists, skip the whole write ---
     if (xSha256 && (await hasBlob(db, xSha256))) {
-      await ctx.req.raw.body?.cancel();
       const existing = await getBlob(db, xSha256);
       if (existing) {
+        // Drain, don't cancel — this returns 200 and the client may still be
+        // sending. See drainBody(). Only reached when the client skipped the
+        // BUD-06 preflight that exists to avoid this transfer.
+        await drainBody(ctx.req.raw.body);
         debug(
           debugPrefix,
           `dedup hit — returning existing blob ${xSha256.slice(0, 8)}`,
