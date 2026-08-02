@@ -46,7 +46,6 @@ import { crypto as stdCrypto } from "@std/crypto";
 import { encodeHex } from "@std/encoding/hex";
 import { DbProxy } from "../db/proxy.ts";
 import { DirectDbHandle } from "../db/direct.ts";
-import { createClient } from "@libsql/client";
 import type { IDbHandle } from "../db/handle.ts";
 
 // ---------------------------------------------------------------------------
@@ -122,6 +121,7 @@ self.onmessage = async (event: MessageEvent<InitMessage | JobMessage>) => {
       db = new DbProxy(msg.dbPort);
     } else {
       // Remote libSQL: open a direct connection inside this isolate
+      const { createClient } = await import("@libsql/client");
       const client = createClient({
         url: msg.dbUrl,
         authToken: msg.dbAuthToken,
