@@ -16,6 +16,10 @@
           f system (import nixpkgs {
             inherit system;
           }));
+
+      runtimeDepsFor = pkgs: [
+        pkgs.ffmpeg
+      ];
     in
     {
       packages = forAllSystems (_system: pkgs:
@@ -53,19 +57,13 @@
               runHook postBuild
             '';
 
-            installPhase = ''
-              runHook preInstall
-              runHook postInstall
-            '';
+            dontInstall = true;
 
             outputHashMode = "recursive";
-            outputHashAlgo = "sha256";
             outputHash = "sha256-dEt9Sg5vM7PZPT/R6Q41P6Sm36RNTZrVCP6MzDPvdHI=";
           };
 
-          runtimeDeps = [
-            pkgs.ffmpeg
-          ];
+          runtimeDeps = runtimeDepsFor pkgs;
 
           blossom-server = stdenvNoCC.mkDerivation {
             pname = "blossom-server";
@@ -141,8 +139,7 @@
         default = pkgs.mkShell {
           packages = [
             pkgs.deno
-            pkgs.ffmpeg
-          ];
+          ] ++ runtimeDepsFor pkgs;
 
           shellHook = ''
             echo "Blossom Server dev shell"
