@@ -1,4 +1,4 @@
-import { type Client, createClient } from "@libsql/client";
+import type { Client } from "@libsql/client";
 import { dirname, join } from "@std/path";
 
 let _client: Client | null = null;
@@ -22,8 +22,10 @@ export async function initDb(config: DbConfig): Promise<Client> {
   let client: Client;
 
   if (remote) {
+    const { createClient } = await import("@libsql/client");
     client = createClient({ url: config.url!, authToken: config.authToken });
   } else {
+    const { createClient } = await import("@libsql/client/sqlite3");
     // Ensure the parent directory exists for local SQLite
     const dir = dirname(config.path);
     await Deno.mkdir(dir, { recursive: true });
