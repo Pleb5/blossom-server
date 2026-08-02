@@ -149,9 +149,9 @@ const STATUS_MESSAGES: Record<number, string> = {
 };
 
 /** Map an HTTP status code to actionable user-facing text. */
-export function friendlyErrorMessage(status: number, xReason?: string): string {
+export function friendlyErrorMessage(status: number, xReason: string | null = null): string {
   const base = STATUS_MESSAGES[status];
   if (base && xReason) return `${base} \u2014 ${xReason}`;
   if (base) return base;
-  return `Error (${status}): ${xReason || "Unknown error"}`;
+  return `Error (${status}): ${xReason ?? "Unknown error"}`;
 }

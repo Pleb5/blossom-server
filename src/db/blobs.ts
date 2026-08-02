@@ -391,11 +391,6 @@ export async function getBlobsForPrune(
   }));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Admin query helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Blob record enriched with an owners array — used by the admin API. */
 export interface AdminBlobRecord extends BlobRecord {
   owners: string[];
 }
@@ -446,7 +441,6 @@ export async function listAllBlobs(
     ? `WHERE ${conditions.join(" AND ")}`
     : "";
 
-  // Validate sort column against allowlist
   const [sortCol, sortDir] = opts.sort ?? ["uploaded", "DESC"];
   const safeCol = BLOB_SORT_COLUMNS.has(sortCol) ? sortCol : "uploaded";
   const safeDir = sortDir === "ASC" ? "ASC" : "DESC";
@@ -613,10 +607,6 @@ export async function countUsers(
   return (rs.rows[0]?.[0] as number) ?? 0;
 }
 
-/**
- * List blobs owned by a pubkey with offset-based pagination, sorted by upload date desc.
- * Used by the admin user detail page (unlike listBlobsByPubkey which uses cursor pagination).
- */
 export async function listBlobsByPubkeyAdmin(
   db: Client,
   pubkey: string,
@@ -644,7 +634,6 @@ export async function listBlobsByPubkeyAdmin(
   }));
 }
 
-/** Count blobs owned by a specific pubkey. Used by the admin user detail page. */
 export async function countBlobsByPubkey(
   db: Client,
   pubkey: string,
@@ -656,11 +645,6 @@ export async function countBlobsByPubkey(
   return (rs.rows[0]?.[0] as number) ?? 0;
 }
 
-/**
- * Return sha256 + type for all blobs that have no entry in the owners table.
- * Used by the prune engine's removeWhenNoOwners phase.
- * The type field is needed to derive the on-disk file extension for deletion.
- */
 export async function getOwnerlessBlobSha256s(
   db: Client,
 ): Promise<{ sha256: string; type: string | null }[]> {

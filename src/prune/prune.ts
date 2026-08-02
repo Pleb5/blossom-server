@@ -53,10 +53,6 @@ export async function pruneStorage(
   // multiple rules overlap (e.g. "image/*" and "*" could match the same blob).
   const checked = new Set<string>();
 
-  // -------------------------------------------------------------------------
-  // Phase 1 — Rule-based expiry
-  // -------------------------------------------------------------------------
-
   const now = Math.floor(Date.now() / 1000);
 
   for (const rule of rules) {
@@ -111,10 +107,6 @@ export async function pruneStorage(
       }
     }
   }
-
-  // -------------------------------------------------------------------------
-  // Phase 2 — Ownerless blob cleanup
-  // -------------------------------------------------------------------------
 
   if (removeWhenNoOwners) {
     let ownerless: { sha256: string; type: string | null }[];

@@ -8,7 +8,9 @@
  */
 
 const enabled = Boolean(Deno.env.get("DEBUG"));
+const encoder = new TextEncoder();
 
 export function debug(...args: unknown[]): void {
-  if (enabled) console.debug(...args);
+  if (!enabled) return;
+  Deno.stderr.writeSync(encoder.encode(`${args.map(String).join(" ")}\n`));
 }

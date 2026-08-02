@@ -54,10 +54,8 @@ export function buildBlobsRouter(
       return errorResponse(ctx, 404, "Blob not found");
     }
 
-    // Derive the extension the file was stored with
     const ext = mimeToExt(blob.type);
 
-    // Check storage has the actual file
     if (!(await storage.has(hash, ext))) {
       return errorResponse(ctx, 404, "Blob not found in storage");
     }

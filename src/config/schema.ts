@@ -32,7 +32,7 @@ const S3StorageSchema = z.object({
   endpoint: z
     .string()
     .describe(
-      'S3-compatible endpoint URL, e.g. "https://s3.amazonaws.com" or "https://nyc3.digitaloceanspaces.com".',
+      "S3-compatible endpoint URL.",
     ),
   bucket: z.string().describe("Name of the S3 bucket to store blobs in."),
   accessKey: z.string().describe(

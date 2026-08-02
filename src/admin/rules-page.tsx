@@ -27,6 +27,22 @@ function ruleTypeColor(type: string): string {
   }
 }
 
+const PubkeyList: FC<{ pubkeys?: string[] }> = ({ pubkeys }) => {
+  if (!pubkeys || pubkeys.length === 0) {
+    return <span class="text-gray-600">all</span>;
+  }
+
+  return (
+    <div class="space-y-0.5">
+      {pubkeys.map((pk) => (
+        <div key={pk} class="font-mono text-xs text-gray-300">
+          {pk.slice(0, 16)}…
+        </div>
+      ))}
+    </div>
+  );
+};
+
 export const RulesPage: FC<RulesPageProps> = ({ config }) => {
   const rules = config.storage.rules;
 
@@ -76,20 +92,7 @@ export const RulesPage: FC<RulesPageProps> = ({ config }) => {
                     <span class="text-gray-200">{rule.type}</span>
                   </Td>
                   <Td>
-                    {!rule.pubkeys || rule.pubkeys.length === 0
-                      ? <span class="text-gray-600">all</span>
-                      : (
-                        <div class="space-y-0.5">
-                          {rule.pubkeys.map((pk) => (
-                            <div
-                              key={pk}
-                              class="font-mono text-xs text-gray-300"
-                            >
-                              {pk.slice(0, 16)}…
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                    <PubkeyList pubkeys={rule.pubkeys} />
                   </Td>
                   <Td>
                     <Badge color="yellow">{rule.expiration}</Badge>
@@ -98,20 +101,7 @@ export const RulesPage: FC<RulesPageProps> = ({ config }) => {
                     <span class="text-gray-600">—</span>
                   </Td>
                   <Td>
-                    {!rule.pubkeys || rule.pubkeys.length === 0
-                      ? <span class="text-gray-600">all</span>
-                      : (
-                        <div class="space-y-0.5">
-                          {rule.pubkeys.map((pk) => (
-                            <div
-                              key={pk}
-                              class="font-mono text-xs text-gray-300"
-                            >
-                              {pk.slice(0, 16)}…
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                    <PubkeyList pubkeys={rule.pubkeys} />
                   </Td>
                   <Td>
                     {rule.expiration

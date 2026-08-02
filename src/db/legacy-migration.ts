@@ -1,51 +1,15 @@
-/**
- * legacy-migration.ts
- *
- * Auto-detects and migrates a legacy Node.js blossom-server SQLite database to
- * the Deno server schema on startup. This file is intentionally self-contained
- * so it can be deleted wholesale when legacy migration support is no longer
- * needed — nothing else in the codebase depends on it except the call-site in
- * main.ts.
- *
- * WHEN IT RUNS
- * ────────────
- * Only for local SQLite files (not remote libSQL / Turso). Called from main.ts
- * before initDb() opens the file. If the file does not exist, or is already on
- * the Deno schema, the function is a fast no-op.
- *
- * DETECTION
- * ─────────
- * The legacy `owners` table has a surrogate `id INTEGER PRIMARY KEY
- * AUTOINCREMENT` column. The Deno schema uses a composite PRIMARY KEY (blob,
- * pubkey) with no id column. We query sqlite_master for the CREATE TABLE
- * statement and check for the presence of the `id` column name.
- *
- * WHAT THE MIGRATION DOES
- * ───────────────────────
- *   1. Reads all rows from blobs, owners (de-duplicated), accessed.
- *   2. Renames the legacy file to <path>.bak (atomic, same filesystem).
- *   3. Creates a fresh file at <path> via the Deno initDb() path so the schema
- *      is guaranteed correct: composite PK on owners, ON DELETE CASCADE,
- *      media_derivatives table, WAL mode.
- *   4. Imports all rows. Strips "; charset=…" parameter suffixes from type
- *      values to produce clean bare MIME types consistent with new uploads.
- *   5. Verifies row counts. On mismatch: restores the backup and aborts.
- *
- * REMOVAL
- * ───────
- * When the Node.js server is fully retired:
- *   - Delete this file (src/db/legacy-migration.ts)
- *   - Remove the import and the maybeMigrateLegacyDb() call from main.ts
- *   - Remove the "migrate-from-legacy" task from deno.json (if still present)
- *   - Delete scripts/migrate-from-legacy.ts (if still present)
- */
-
 import { createClient } from "@libsql/client";
 import { type DbConfig, initDb } from "./client.ts";
 
-// ---------------------------------------------------------------------------
-// Public API — single entry point
-// ---------------------------------------------------------------------------
+const encoder = new TextEncoder();
+
+function writeLine(message = ""): void {
+  Deno.stdout.writeSync(encoder.encode(`${message}\n`));
+}
+
+function writeErrorLine(message: string): void {
+  Deno.stderr.writeSync(encoder.encode(`${message}\n`));
+}
 
 /**
  * If `dbPath` points at a legacy Node.js blossom-server SQLite database,
@@ -70,17 +34,11 @@ export async function maybeMigrateLegacyDb(
     return;
   }
 
-  // Detect legacy schema — fast check, no rows read.
   const isLegacy = await detectLegacySchema(dbPath);
   if (!isLegacy) return;
 
-  // Run migration.
   await runMigration(dbPath, dbConfig);
 }
-
-// ---------------------------------------------------------------------------
-// Detection
-// ---------------------------------------------------------------------------
 
 /**
  * Returns true when the SQLite file at `dbPath` has the legacy Node.js schema.
@@ -106,26 +64,18 @@ async function detectLegacySchema(dbPath: string): Promise<boolean> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Migration
-// ---------------------------------------------------------------------------
-
 async function runMigration(dbPath: string, dbConfig: DbConfig): Promise<void> {
   const backupPath = `${dbPath}.bak`;
   const startedAt = Date.now();
 
-  const log = (msg: string) => console.log(`  [legacy-migration] ${msg}`);
-  const err = (msg: string) => console.error(`  [legacy-migration] ${msg}`);
+  const log = (msg: string) => writeLine(`  [legacy-migration] ${msg}`);
+  const err = (msg: string) => writeErrorLine(`  [legacy-migration] ${msg}`);
 
-  console.log("");
+  writeLine();
   log("━━━ Legacy Node.js database detected ━━━");
   log(`Source:  ${dbPath}`);
   log(`Backup:  ${backupPath}`);
-  console.log("");
-
-  // ------------------------------------------------------------------
-  // Step 1 — Read all data from the legacy DB
-  // ------------------------------------------------------------------
+  writeLine();
 
   log("Step 1/5 — Reading legacy data");
 
@@ -175,17 +125,9 @@ async function runMigration(dbPath: string, dbConfig: DbConfig): Promise<void> {
   );
   log(`         accessed: ${accessed.length}`);
 
-  // ------------------------------------------------------------------
-  // Step 2 — Backup the legacy file
-  // ------------------------------------------------------------------
-
   log("Step 2/5 — Backing up legacy database");
   await Deno.rename(dbPath, backupPath);
   log(`         sqlite.db → sqlite.db.bak`);
-
-  // ------------------------------------------------------------------
-  // Step 3 — Create fresh DB with Deno schema
-  // ------------------------------------------------------------------
 
   log("Step 3/5 — Creating fresh database with Deno schema");
 
@@ -197,10 +139,6 @@ async function runMigration(dbPath: string, dbConfig: DbConfig): Promise<void> {
   log(
     "         owners: composite PRIMARY KEY (blob, pubkey) + ON DELETE CASCADE",
   );
-
-  // ------------------------------------------------------------------
-  // Step 4 — Import data
-  // ------------------------------------------------------------------
 
   log("Step 4/5 — Importing data");
 
@@ -248,10 +186,6 @@ async function runMigration(dbPath: string, dbConfig: DbConfig): Promise<void> {
   log(`         owners:   ${owners.length} imported`);
   log(`         accessed: ${accessed.length} imported`);
 
-  // ------------------------------------------------------------------
-  // Step 5 — Verify row counts
-  // ------------------------------------------------------------------
-
   log("Step 5/5 — Verifying");
 
   const [vb, vo, va] = await Promise.all([
@@ -284,16 +218,11 @@ async function runMigration(dbPath: string, dbConfig: DbConfig): Promise<void> {
     Deno.exit(1);
   }
 
-  // Migration succeeded — close here so main.ts can call initDb() cleanly.
   fresh.close();
 
   const elapsedMs = Date.now() - startedAt;
 
-  // ------------------------------------------------------------------
-  // Summary
-  // ------------------------------------------------------------------
-
-  console.log("");
+  writeLine();
   log("━━━ Migration successful ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   log(
     `  blobs:    ${gotBlobs}  |  owners: ${gotOwners}  |  accessed: ${gotAccessed}`,
@@ -309,5 +238,5 @@ async function runMigration(dbPath: string, dbConfig: DbConfig): Promise<void> {
   log(`  elapsed:  ${elapsedMs}ms`);
   log(`  backup:   ${backupPath}`);
   log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  console.log("");
+  writeLine();
 }

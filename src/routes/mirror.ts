@@ -48,10 +48,6 @@ import { getBaseUrl, getBlobUrl } from "../utils/url.ts";
 import { getFileRule } from "../prune/rules.ts";
 import { extractDimensions } from "../optimize/dimensions.ts";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 /** BUD-02 Blob Descriptor (same shape as upload route) */
 interface BlobDescriptor {
   url: string;
@@ -62,10 +58,6 @@ interface BlobDescriptor {
   /** Additional NIP-94 file metadata tags. */
   nip94?: Nip94Tag[];
 }
-
-// ---------------------------------------------------------------------------
-// Private RFC-1918 / loopback CIDR ranges for SSRF guard
-// ---------------------------------------------------------------------------
 
 /** Returns true if a dotted-decimal IPv4 string falls in a private/loopback range. */
 function isPrivateIPv4(ip: string): boolean {
@@ -109,10 +101,6 @@ function checkSsrf(hostname: string): string | null {
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// Router
-// ---------------------------------------------------------------------------
-
 export function buildMirrorRouter(
   db: Client,
   storage: IBlobStorage,
@@ -124,13 +112,11 @@ export function buildMirrorRouter(
     const reqId = ulid();
     const debugPrefix = `[mirror:${reqId}]`;
 
-    // --- 1. Feature flag ---
     if (!config.mirror.enabled) {
       debug(debugPrefix, "rejected: mirroring disabled");
       return errorResponse(ctx, 403, "Mirroring is disabled on this server");
     }
 
-    // --- 2. BUD-11 auth (t="upload", same verb as PUT /upload per spec) ---
     let auth: ReturnType<typeof requireAuth> | undefined;
     if (config.mirror.requireAuth) {
       try {
@@ -148,7 +134,6 @@ export function buildMirrorRouter(
       auth = ctx.get("auth");
     }
 
-    // --- 3. Parse JSON body { url } ---
     let mirrorUrl: URL;
     try {
       const body = (await ctx.req.json()) as { url?: unknown };
@@ -177,7 +162,6 @@ export function buildMirrorRouter(
       }`,
     );
 
-    // --- 4. URL scheme validation ---
     if (mirrorUrl.protocol !== "http:" && mirrorUrl.protocol !== "https:") {
       debug(
         debugPrefix,
@@ -190,15 +174,12 @@ export function buildMirrorRouter(
       );
     }
 
-    // --- 5. SSRF guard: reject literal private / loopback IP addresses ---
     const ssrfError = checkSsrf(mirrorUrl.hostname);
     if (ssrfError) {
       debug(debugPrefix, `rejected: SSRF guard — ${ssrfError}`);
       return errorResponse(ctx, 400, ssrfError);
     }
 
-    // --- 6. Pre-fetch pool check (before opening any TCP connection) ---
-    // If all workers are busy, fail immediately without touching the network.
     if (getPool().available === 0) {
       debug(debugPrefix, "rejected: all upload workers busy (pre-fetch)");
       return errorResponse(
@@ -208,16 +189,6 @@ export function buildMirrorRouter(
       );
     }
 
-    // --- 7. Outbound fetch with connect timeout ---
-    // IMPORTANT: We must NOT pass an AbortSignal directly to fetch() because
-    // the signal remains bound to the response body stream — if it fires mid-
-    // transfer, the body stream errors inside the worker with a DOMException
-    // whose message is lost across the isolate boundary (arrives as "Error").
-    //
-    // Instead we race the fetch Promise against a manual timeout. If headers
-    // don't arrive in time we cancel the in-flight fetch via a separate
-    // AbortController. The body stream is never associated with the timeout
-    // signal — bodyTimeout (if set) handles transfer limits separately.
     debug(
       debugPrefix,
       `fetching origin url=${mirrorUrl.toString()} connectTimeout=${config.mirror.connectTimeout}ms bodyTimeout=${config.mirror.bodyTimeout}ms`,
@@ -270,7 +241,6 @@ export function buildMirrorRouter(
       return errorResponse(ctx, 502, reason);
     }
 
-    // --- 8. Non-2xx origin response ---
     if (!originResponse.ok) {
       await originResponse.body?.cancel();
       debug(
@@ -284,7 +254,6 @@ export function buildMirrorRouter(
       );
     }
 
-    // --- 9. Content-Length gate (413 before any body bytes flow to the worker) ---
     const contentLengthHeader = originResponse.headers.get("content-length");
     const contentLength = contentLengthHeader
       ? parseInt(contentLengthHeader, 10)
@@ -305,8 +274,6 @@ export function buildMirrorRouter(
       );
     }
 
-    // --- 10. Content-Type check / storage rule gate ---
-    // BUD-04: use Content-Type from origin; fall back to application/octet-stream.
     const rawContentType = originResponse.headers.get("content-type") ??
       "application/octet-stream";
     const mimeType = rawContentType.split(";")[0].trim() ||
@@ -344,9 +311,6 @@ export function buildMirrorRouter(
       );
     }
 
-    // --- 11. Begin write session + dispatch to upload worker ---
-    // beginWrite() allocates a local tmp file. Zero bytes reach S3 until
-    // commitWrite() is called after hash verification.
     const body = originResponse.body;
     if (!body) {
       debug(debugPrefix, "rejected: origin returned empty body");
@@ -416,7 +380,6 @@ export function buildMirrorRouter(
       );
     }
 
-    // --- 12. Await worker result ---
     let hash: string;
     let size: number;
     debug(debugPrefix, "awaiting worker result");
@@ -446,12 +409,6 @@ export function buildMirrorRouter(
       return errorResponse(ctx, 502, msg);
     }
 
-    // --- 13. BUD-11 x-tag verification (strict, post-hash) ---
-    // Per BUD-11: x tag is REQUIRED for PUT /mirror.
-    //   - If auth is present and no x tags exist → 403 (token not scoped to any blob)
-    //   - If auth is present and x tags exist but none matches computed hash → 403
-    // We intentionally do NOT use requireXTag() here because that function
-    // passes silently when no x tags are present. Mirror requires them.
     if (auth) {
       const xTags = auth.tags.filter((t) => t[0] === "x");
       if (xTags.length === 0) {
@@ -484,7 +441,6 @@ export function buildMirrorRouter(
 
     const ext = mimeToExt(mimeType);
 
-    // --- 14. Dedup guard ---
     if (await hasBlob(db, hash)) {
       await storage.abortWrite(session).catch(() => {});
       const existing = await getBlob(db, hash);
@@ -518,11 +474,6 @@ export function buildMirrorRouter(
       }
     }
 
-    // --- 15. Commit: move verified tmp file to final storage location ---
-    // For local: atomic rename. For S3: stream to bucket, delete local tmp.
-    //
-    // Extract pixel dimensions from the verified temp file *before* commit —
-    // commitWrite() consumes session.tmpPath. Best-effort: null on failure.
     const blobType = mimeType !== "application/octet-stream" ? mimeType : null;
     const dim = await extractDimensions(session.tmpPath, blobType);
     debug(debugPrefix, `dim=${dim ?? "none"}`);
@@ -538,7 +489,6 @@ export function buildMirrorRouter(
       throw err;
     }
 
-    // --- 16. Insert metadata ---
     const now = Math.floor(Date.now() / 1000);
     const blobRecord = {
       sha256: hash,
@@ -553,7 +503,6 @@ export function buildMirrorRouter(
     const t5 = Date.now();
     debug(debugPrefix, `insertBlob complete elapsed=${t5 - t4}ms`);
 
-    // --- 17. Return BlobDescriptor ---
     debug(
       debugPrefix,
       `mirror complete — ${hash} (${size} bytes, ${

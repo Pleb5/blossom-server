@@ -42,16 +42,6 @@ async function detectMimeType(filePath: string): Promise<string | null> {
   }
 }
 
-/**
- * Detects, validates, and optimizes/transcodes the file at inputPath.
- * Returns the path to the optimized output temp file.
- *
- * Throws Error("Unsupported file type") if the MIME type cannot be determined
- * or is not a supported image/video type.
- *
- * Wraps the full pipeline in try/catch; on failure deletes any partial output
- * temp file before rethrowing with "Optimization failed: <message>" prefix.
- */
 export async function optimizeMedia(
   inputPath: string,
   config: MediaConfig,
@@ -82,7 +72,6 @@ export async function optimizeMedia(
       throw new Error(`Unsupported file type: ${mime}`);
     }
   } catch (err) {
-    // Clean up any partial output before rethrowing
     if (outputPath) {
       await Deno.remove(outputPath).catch(() => {});
     }

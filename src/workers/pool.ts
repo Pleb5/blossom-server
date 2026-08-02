@@ -37,9 +37,7 @@ import type { Client } from "@libsql/client";
 import { installDbBridge } from "../db/bridge.ts";
 import type { DbConfig } from "../db/client.ts";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+const encoder = new TextEncoder();
 
 /** Error subclass that preserves the worker's errorType for status code mapping. */
 export class WorkerJobError extends Error {
@@ -69,7 +67,6 @@ interface WorkerState {
   throughputBps: number;
 }
 
-// Messages a worker can post back.
 interface ThroughputMessage {
   type: "throughput";
   bytesPerSec: number;
@@ -89,9 +86,9 @@ function isThroughput(msg: WorkerMessage): msg is ThroughputMessage {
   return (msg as ThroughputMessage).type === "throughput";
 }
 
-// ---------------------------------------------------------------------------
-// Pool
-// ---------------------------------------------------------------------------
+function transferStream(stream: ReadableStream<Uint8Array>): Transferable[] {
+  return [stream as Transferable];
+}
 
 export class UploadWorkerPool {
   private workers: WorkerState[] = [];
@@ -174,10 +171,6 @@ export class UploadWorkerPool {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Public API
-  // ---------------------------------------------------------------------------
-
   /** Total number of workers in the pool. */
   get size(): number {
     return this.workers.length;
@@ -233,7 +226,7 @@ export class UploadWorkerPool {
     // Transfer the stream to the worker — zero-copy, no tee on the main thread.
     candidate.worker.postMessage(
       { type: "job", id, stream, tmpPath, sizeHint, xSha256 },
-      [stream as unknown as Transferable],
+      transferStream(stream),
     );
 
     return promise;
@@ -248,10 +241,6 @@ export class UploadWorkerPool {
     this.pending.clear();
   }
 }
-
-// ---------------------------------------------------------------------------
-// Singleton
-// ---------------------------------------------------------------------------
 
 let _pool: UploadWorkerPool | null = null;
 
@@ -270,8 +259,10 @@ export function initPool(
     db,
     dbConfig,
   );
-  console.log(
-    `Upload worker pool initialized with ${size} workers (max ${maxJobsPerWorker} jobs/worker).`,
+  Deno.stdout.writeSync(
+    encoder.encode(
+      `Upload worker pool initialized with ${size} workers (max ${maxJobsPerWorker} jobs/worker).\n`,
+    ),
   );
   return _pool;
 }

@@ -28,9 +28,9 @@ function getBlobUrl(
   host: string,
 ): string {
   const ext = mimeToExt(type);
-  const base = config.publicDomain
-    ? `https://${config.publicDomain.replace(/\/$/, "")}`
-    : `http://${host}`;
+  const scheme = config.publicDomain ? "https" : "http";
+  const hostname = config.publicDomain?.replace(/\/$/, "") ?? host;
+  const base = `${scheme}://${hostname}`;
   return `${base}/${sha256}${ext ? "." + ext : ""}`;
 }
 

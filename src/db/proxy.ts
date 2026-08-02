@@ -54,10 +54,6 @@ export class DbProxy implements IDbHandle {
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // Core blob ops
-  // ---------------------------------------------------------------------------
-
   hasBlob(sha256: string): Promise<boolean> {
     return this.call<boolean>("hasBlob", [sha256]);
   }
@@ -77,10 +73,6 @@ export class DbProxy implements IDbHandle {
   getStats(): Promise<BlobStats> {
     return this.call<BlobStats>("getStats", []);
   }
-
-  // ---------------------------------------------------------------------------
-  // Admin blob ops
-  // ---------------------------------------------------------------------------
 
   listAllBlobs(
     opts?: Parameters<IDbHandle["listAllBlobs"]>[0],
@@ -119,10 +111,6 @@ export class DbProxy implements IDbHandle {
   countBlobsByPubkey(pubkey: string): Promise<number> {
     return this.call<number>("countBlobsByPubkey", [pubkey]);
   }
-
-  // ---------------------------------------------------------------------------
-  // Admin report ops
-  // ---------------------------------------------------------------------------
 
   listAllReports(
     opts?: Parameters<IDbHandle["listAllReports"]>[0],
