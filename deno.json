@@ -9,10 +9,22 @@
     "lib": ["dom", "dom.iterable", "esnext", "deno.ns"]
   },
   "tasks": {
-    "dev": "deno run --env-file=.env --watch --allow-net --allow-read --allow-write --allow-env --allow-ffi --allow-sys --allow-run main.ts",
-    "start": "deno run --env-file=.env --allow-net --allow-read --allow-write --allow-env --allow-ffi --allow-sys --allow-run main.ts",
-    "test": "deno test --env-file=.env --allow-net --allow-read --allow-write --allow-env --allow-ffi --allow-sys tests/unit/ tests/e2e/",
-    "build": "deno bundle --config src/landing/client/deno.json --minify --platform browser -o public/client.js src/landing/client/index.tsx"
+    "dev": "deno run -P --env-file=.env --watch main.ts",
+    "start": "deno run -P --env-file=.env main.ts",
+    "test": "deno test -P --env-file=.env tests/unit/ tests/e2e/",
+    "build": "deno task build:client",
+    "build:client": "deno bundle --frozen --lock=src/landing/client/deno.lock --config src/landing/client/deno.json --minify --platform browser -o public/client.js src/landing/client/index.tsx"
+  },
+  "permissions": {
+    "default": {
+      "net": true,
+      "read": true,
+      "write": true,
+      "env": true,
+      "ffi": true,
+      "sys": true,
+      "run": true
+    }
   },
   "imports": {
     "@bradenmacdonald/s3-lite-client": "jsr:@bradenmacdonald/s3-lite-client@^0.9.5",

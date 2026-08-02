@@ -78,6 +78,30 @@ deno task build
 deno task start
 ```
 
+## Quick Start — Nix
+
+This repository includes a flake that builds the server reproducibly with a
+pinned Nixpkgs input and a fixed-output Deno dependency cache. The build also
+pre-builds the landing page client bundle into the package output. The pinned
+cache is currently provided for `x86_64-linux`.
+
+```sh
+# Build the package
+nix build .#blossom-server
+
+# Run the packaged server from the current directory
+# Configuration still defaults to ./config.yml, and relative data paths are
+# resolved from the directory where this command is run.
+nix run .# -- ./config.yml
+
+# Enter a development shell with Deno and ffmpeg on PATH
+nix develop
+```
+
+The packaged wrapper includes `ffmpeg`/`ffprobe` on `PATH` for media handling.
+If your Nix install does not enable flakes globally, add
+`--extra-experimental-features 'nix-command flakes'` to the `nix` commands.
+
 Pass a custom config path as the first argument:
 
 ```sh
