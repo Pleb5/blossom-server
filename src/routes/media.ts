@@ -164,6 +164,7 @@ async function prepareThumbnail(
     inputPath,
     inputType,
     config.media.thumbnail,
+    config.media.tmpDir,
   );
   try {
     const { hash, size } = await hashFile(path);

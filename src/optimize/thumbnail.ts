@@ -23,9 +23,11 @@ function ffmpegQuality(
 async function thumbnailImage(
   inputPath: string,
   opts: ThumbnailConfig,
+  tmpDir: string,
 ): Promise<string> {
   const { default: sharp } = await import("sharp");
   const outputPath = await Deno.makeTempFile({
+    dir: tmpDir,
     suffix: `.${opts.outputFormat}`,
   });
 
@@ -57,8 +59,10 @@ async function thumbnailImage(
 async function thumbnailVideo(
   inputPath: string,
   opts: ThumbnailConfig,
+  tmpDir: string,
 ): Promise<string> {
   const outputPath = await Deno.makeTempFile({
+    dir: tmpDir,
     suffix: `.${opts.outputFormat}`,
   });
   const args = [
@@ -96,9 +100,16 @@ export async function createThumbnail(
   inputPath: string,
   mime: string | null,
   opts: ThumbnailConfig,
+  tmpDir: string,
 ): Promise<string> {
+  await Deno.mkdir(tmpDir, { recursive: true });
+
   if (!opts.enabled) throw new Error("Thumbnail generation is disabled");
-  if (mime?.startsWith("image/")) return await thumbnailImage(inputPath, opts);
-  if (mime?.startsWith("video/")) return await thumbnailVideo(inputPath, opts);
+  if (mime?.startsWith("image/")) {
+    return await thumbnailImage(inputPath, opts, tmpDir);
+  }
+  if (mime?.startsWith("video/")) {
+    return await thumbnailVideo(inputPath, opts, tmpDir);
+  }
   throw new Error(`Unsupported thumbnail MIME type: ${mime ?? "unknown"}`);
 }

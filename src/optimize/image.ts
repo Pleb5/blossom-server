@@ -18,9 +18,11 @@ export type { ImageOptimizeConfig as ImageOptimizeOptions };
 export async function optimizeImage(
   inputPath: string,
   opts: ImageOptimizeConfig,
+  tmpDir: string,
 ): Promise<string> {
   const { default: sharp } = await import("sharp");
   const outputPath = await Deno.makeTempFile({
+    dir: tmpDir,
     suffix: `.${opts.outputFormat}`,
   });
 
@@ -71,9 +73,11 @@ export async function optimizeImage(
 export async function optimizeGif(
   inputPath: string,
   opts: ImageOptimizeConfig,
+  tmpDir: string,
 ): Promise<string> {
   const { default: sharp } = await import("sharp");
   const outputPath = await Deno.makeTempFile({
+    dir: tmpDir,
     suffix: `.${opts.outputFormat}`,
   });
 

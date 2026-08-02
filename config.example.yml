@@ -215,6 +215,12 @@ media:
   # Maximum input file size in bytes before reading the body. Default: 1 GB.
   maxSize: 1073741824 # 1 GB
 
+  # Local directory for optimized media and thumbnail temp files before they are
+  # committed to storage. Keep this on the same filesystem as storage.local.dir
+  # for fastest local commits. Still used with S3 because optimization happens
+  # locally before upload.
+  tmpDir: ./data/media-tmp
+
   image:
     # Output quality 0–100. Higher = better quality, larger file.
     quality: 90

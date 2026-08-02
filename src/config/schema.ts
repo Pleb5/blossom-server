@@ -352,6 +352,12 @@ const MediaSchema = z.object({
     .describe(
       "Maximum input file size in bytes before reading the body. Default: 1 GB.",
     ),
+  tmpDir: z
+    .string()
+    .default("./data/media-tmp")
+    .describe(
+      "Local directory used for optimized media and thumbnail temp files before committing them to the configured storage backend.",
+    ),
   image: ImageOptimizeSchema.optional()
     .transform((v) => v ?? ImageOptimizeSchema.parse({}))
     .describe("Image optimisation settings."),
