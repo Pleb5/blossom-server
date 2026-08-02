@@ -63,6 +63,10 @@
             outputHash = "sha256-dEt9Sg5vM7PZPT/R6Q41P6Sm36RNTZrVCP6MzDPvdHI=";
           };
 
+          runtimeDeps = [
+            pkgs.ffmpeg
+          ];
+
           blossom-server = stdenvNoCC.mkDerivation {
             pname = "blossom-server";
             inherit version src;
@@ -99,7 +103,7 @@
               cp -R deno-dir/. "$out/share/deno-dir/"
 
               makeWrapper ${lib.getExe pkgs.deno} "$out/bin/blossom-server" \
-                --prefix PATH : ${lib.makeBinPath [ pkgs.ffmpeg ]} \
+                --prefix PATH : ${lib.makeBinPath runtimeDeps} \
                 --set DENO_DIR "$out/share/deno-dir" \
                 --add-flags "run" \
                 --add-flags "-P" \
