@@ -102,6 +102,70 @@ The packaged wrapper includes `ffmpeg`/`ffprobe` on `PATH` for media handling.
 If your Nix install does not enable flakes globally, add
 `--extra-experimental-features 'nix-command flakes'` to the `nix` commands.
 
+### NixOS service
+
+The flake exports `nixosModules.default`, which runs Blossom as a hardened
+systemd service with persistent state in `/var/lib/blossom-server`:
+
+```nix
+{
+  inputs.blossom-server.url = "github:hzrd149/blossom-server";
+
+  outputs = { nixpkgs, blossom-server, ... }: {
+    nixosConfigurations.example = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        blossom-server.nixosModules.default
+        {
+          services.blossom-server = {
+            enable = true;
+            openFirewall = true;
+
+            settings = {
+              host = "0.0.0.0";
+              publicDomain = "blobs.example.com";
+              storage.backend = "local";
+            };
+          };
+        }
+      ];
+    };
+  };
+}
+```
+
+For S3, Turso, or dashboard credentials, put environment variable placeholders
+in `settings` and provide a root-readable environment file. Secrets must not be
+written directly in `settings`, because the generated YAML is stored in the
+world-readable Nix store.
+
+```nix
+services.blossom-server = {
+  environmentFile = "/run/secrets/blossom-server.env";
+
+  settings.storage = {
+    backend = "s3";
+    s3 = {
+      endpoint = "https://s3.example.com";
+      bucket = "blossom";
+      accessKey = "\${S3_ACCESS_KEY}";
+      secretKey = "\${S3_SECRET_KEY}";
+    };
+  };
+};
+```
+
+The corresponding environment file contains:
+
+```sh
+S3_ACCESS_KEY=example
+S3_SECRET_KEY=secret
+```
+
+This works with runtime paths produced by secret managers such as sops-nix or
+agenix. The module defaults to `127.0.0.1:3000` and keeps the firewall closed,
+which is suitable when running behind a reverse proxy.
+
 Pass a custom config path as the first argument:
 
 ```sh
