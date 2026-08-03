@@ -166,6 +166,10 @@ This works with runtime paths produced by secret managers such as sops-nix or
 agenix. The module defaults to `127.0.0.1:3000` and keeps the firewall closed,
 which is suitable when running behind a reverse proxy.
 
+For a complete, runnable example, see the [NixOS VM guide](nix/VM-EXAMPLE.md).
+It builds a QEMU VM from this flake and also shows how to activate the same
+configuration on an existing NixOS host with `nixos-rebuild`.
+
 Pass a custom config path as the first argument:
 
 ```sh

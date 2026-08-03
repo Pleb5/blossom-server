@@ -43,13 +43,24 @@
     {
       packages = forAllSystems (
         _system: pkgs:
-        import ./nix/package.nix {
+        (import ./nix/package.nix {
           inherit pkgs src systems;
           version = (builtins.fromJSON (builtins.readFile ./deno.json)).version;
+        })
+        // {
+          example-vm = self.nixosConfigurations.blossom-vm.config.system.build.vm;
         }
       );
 
       nixosModules.default = import ./nix/module.nix self;
+
+      nixosConfigurations.blossom-vm = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = [
+          self.nixosModules.default
+          ./nix/example-vm.nix
+        ];
+      };
 
       apps = forAllSystems (
         system: _pkgs: {
