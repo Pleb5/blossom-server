@@ -15,6 +15,7 @@
     "npm:@libsql/client@*": "0.17.0",
     "npm:@libsql/client@0.17": "0.17.0",
     "npm:applesauce-common@6": "6.0.1",
+    "npm:applesauce-core@*": "6.0.0",
     "npm:applesauce-core@6": "6.0.0",
     "npm:applesauce-loaders@6": "6.0.0",
     "npm:applesauce-relay@6": "6.0.0",

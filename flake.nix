@@ -34,6 +34,7 @@
                 base = baseNameOf path;
               in
               !(base == ".git" || base == ".planning" || base == ".claude" || base == "data"
+                || base == "flake.nix" || base == "flake.lock"
                 || base == "node_modules");
           };
 
@@ -46,13 +47,20 @@
             buildPhase = ''
               runHook preBuild
 
-              export DENO_DIR="$out"
-              deno cache --frozen --lock=deno.lock main.ts
-              deno cache \
+              export DENO_DIR="/build/deno-dir"
+              deno install --frozen --lock=deno.lock --entrypoint main.ts
+              deno install \
                 --config src/landing/client/deno.json \
+                --frozen \
                 --lock=src/landing/client/deno.lock \
-                src/landing/client/index.tsx
+                --entrypoint src/landing/client/index.tsx
               deno task build:client
+
+              mkdir -p "$out"
+              cp -R vendor node_modules "$out/"
+              mkdir -p "$out/src/landing/client"
+              cp -R src/landing/client/vendor src/landing/client/node_modules "$out/src/landing/client/"
+              cp public/client.js "$out/client.js"
 
               runHook postBuild
             '';
@@ -60,7 +68,7 @@
             dontInstall = true;
 
             outputHashMode = "recursive";
-            outputHash = "sha256-dEt9Sg5vM7PZPT/R6Q41P6Sm36RNTZrVCP6MzDPvdHI=";
+            outputHash = "sha256-HUSspxQJMc7ayPvTaRUfy/XUE+yTZirXQJVLj7oWN48=";
           };
 
           runtimeDeps = runtimeDepsFor pkgs;
@@ -77,18 +85,17 @@
             buildPhase = ''
               runHook preBuild
 
-              cp -R ${denoDeps} deno-dir
-              chmod -R u+w deno-dir
-              export DENO_DIR="$PWD/deno-dir"
+              cp -R ${denoDeps}/vendor ${denoDeps}/node_modules .
+              mkdir -p src/landing/client
+              cp -R ${denoDeps}/src/landing/client/vendor ${denoDeps}/src/landing/client/node_modules \
+                src/landing/client/
 
               client_bundle="$out/share/blossom-server/public/client.js"
               substituteInPlace src/routes/landing.tsx \
                 --replace-fail 'const CLIENT_BUNDLE_PATH = "./public/client.js";' \
                                "const CLIENT_BUNDLE_PATH = \"$client_bundle\";"
 
-              deno task build:client
-
-              deno cache --frozen --lock=deno.lock main.ts
+              cp ${denoDeps}/client.js public/client.js
 
               runHook postBuild
             '';
@@ -96,14 +103,13 @@
             installPhase = ''
               runHook preInstall
 
-              mkdir -p "$out/share/blossom-server" "$out/share/deno-dir" "$out/bin"
-              cp -R main.ts deno.json deno.lock public src "$out/share/blossom-server/"
-              cp -R deno-dir/. "$out/share/deno-dir/"
+              mkdir -p "$out/share/blossom-server" "$out/bin"
+              cp -R main.ts deno.json deno.lock public src vendor node_modules "$out/share/blossom-server/"
 
               makeWrapper ${lib.getExe pkgs.deno} "$out/bin/blossom-server" \
                 --prefix PATH : ${lib.makeBinPath runtimeDeps} \
-                --set DENO_DIR "$out/share/deno-dir" \
                 --add-flags "run" \
+                --add-flags "--cached-only" \
                 --add-flags "-P" \
                 --add-flags "--config=$out/share/blossom-server/deno.json" \
                 --add-flags "--frozen" \

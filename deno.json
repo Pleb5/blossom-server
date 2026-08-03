@@ -48,5 +48,7 @@
     "file-type": "npm:file-type@^19.6.0",
     "zod": "npm:zod@^4.3.6"
   },
-  "exclude": ["src/landing/client"]
+  "exclude": ["src/landing/client"],
+  "nodeModulesDir": "auto",
+  "vendor": true
 }
