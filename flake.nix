@@ -26,6 +26,15 @@
         let
           inherit (pkgs) lib stdenvNoCC;
           version = (builtins.fromJSON (builtins.readFile ./deno.json)).version;
+          sourceExclusions = [
+            ".git"
+            ".planning"
+            ".claude"
+            "data"
+            "flake.nix"
+            "flake.lock"
+            "node_modules"
+          ];
 
           src = lib.cleanSourceWith {
             src = ./.;
@@ -33,9 +42,7 @@
               let
                 base = baseNameOf path;
               in
-              !(base == ".git" || base == ".planning" || base == ".claude" || base == "data"
-                || base == "flake.nix" || base == "flake.lock"
-                || base == "node_modules");
+              !(lib.elem base sourceExclusions);
           };
 
           denoDeps = stdenvNoCC.mkDerivation {
