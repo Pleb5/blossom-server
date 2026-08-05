@@ -3,10 +3,16 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    deno2nix.url = "github:hzrd149/deno2nix";
+    deno2nix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      deno2nix,
+    }:
     let
       systems = [
         "x86_64-linux"
@@ -19,6 +25,7 @@
           f system (
             import nixpkgs {
               inherit system;
+              overlays = [ deno2nix.overlays.default ];
             }
           )
         );
@@ -49,7 +56,7 @@
       packages = forAllSystems (
         system: pkgs:
         (import ./nix/package.nix {
-          inherit pkgs src systems;
+          inherit pkgs src;
           version = (builtins.fromJSON (builtins.readFile ./deno.json)).version;
         })
         // {
