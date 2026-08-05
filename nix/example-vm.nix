@@ -1,11 +1,5 @@
+{ config, ... }:
 {
-  lib,
-  modulesPath,
-  ...
-}:
-{
-  imports = [ (modulesPath + "/virtualisation/qemu-vm.nix") ];
-
   networking.hostName = "blossom-vm";
 
   services.blossom-server = {
@@ -36,16 +30,24 @@
   networking.firewall.allowedTCPPorts = [ 22 ];
 
   virtualisation = {
+    graphics = false;
     memorySize = 2048;
     cores = 2;
+    # Keep the demonstration disposable instead of writing a qcow2 image into
+    # the directory from which it was launched.
+    diskImage = null;
     forwardPorts = [
       {
         from = "host";
-        host.port = 3000;
-        guest.port = 3000;
+        proto = "tcp";
+        host.address = "127.0.0.1";
+        host.port = config.services.blossom-server.settings.port;
+        guest.port = config.services.blossom-server.settings.port;
       }
       {
         from = "host";
+        proto = "tcp";
+        host.address = "127.0.0.1";
         host.port = 2222;
         guest.port = 22;
       }
@@ -53,7 +55,4 @@
   };
 
   system.stateVersion = "25.11";
-
-  # This configuration is intentionally a demo, not a production baseline.
-  nixpkgs.hostPlatform = lib.mkDefault "x86_64-linux";
 }

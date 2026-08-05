@@ -41,26 +41,30 @@
       };
     in
     {
+      nixosModules = {
+        blossom-server = import ./nix/module.nix self;
+        default = self.nixosModules.blossom-server;
+      };
+
       packages = forAllSystems (
-        _system: pkgs:
+        system: pkgs:
         (import ./nix/package.nix {
           inherit pkgs src systems;
           version = (builtins.fromJSON (builtins.readFile ./deno.json)).version;
         })
         // {
-          example-vm = self.nixosConfigurations.blossom-vm.config.system.build.vm;
+          # `nix run .#vm` — a disposable Blossom demonstration VM.
+          vm =
+            (nixpkgs.lib.nixosSystem {
+              modules = [
+                { nixpkgs.hostPlatform = system; }
+                "${nixpkgs}/nixos/modules/virtualisation/qemu-vm.nix"
+                self.nixosModules.default
+                ./nix/example-vm.nix
+              ];
+            }).config.system.build.vm;
         }
       );
-
-      nixosModules.default = import ./nix/module.nix self;
-
-      nixosConfigurations.blossom-vm = nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
-        modules = [
-          self.nixosModules.default
-          ./nix/example-vm.nix
-        ];
-      };
 
       apps = forAllSystems (
         system: _pkgs: {
