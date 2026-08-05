@@ -11,7 +11,10 @@ let
     pname = "blossom-server-deno-deps";
     inherit version src;
 
-    nativeBuildInputs = [ pkgs.deno ];
+    nativeBuildInputs = [
+      pkgs.deno
+      pkgs.jq
+    ];
 
     buildPhase = ''
       runHook preBuild
@@ -25,6 +28,23 @@ let
         --entrypoint src/landing/client/index.tsx
       deno task build:client
 
+      # `vendor/jsr.io/<scope>/<name>/meta.json` is the JSR registry listing of
+      # every published version, so it changes whenever upstream publishes a
+      # release — which would break this fixed-output hash for reasons that have
+      # nothing to do with our locked dependencies. Reduce it to the versions we
+      # actually vendored; Deno still needs the file to resolve `jsr:` imports.
+      for meta in vendor/jsr.io/*/*/meta.json src/landing/client/vendor/jsr.io/*/*/meta.json; do
+        vendored=$(
+          find "$(dirname "$meta")" -maxdepth 1 -name '*_meta.json' -printf '%f\n' \
+            | sed 's/_meta\.json$//' | sort | jq -R . | jq -s .
+        )
+        jq --argjson vendored "$vendored" \
+          '.versions |= with_entries(select(.key as $v | $vendored | index($v)))
+           | .latest = ($vendored | last)' \
+          "$meta" > "$meta.pruned"
+        mv "$meta.pruned" "$meta"
+      done
+
       mkdir -p "$out"
       cp -R vendor node_modules "$out/"
       mkdir -p "$out/src/landing/client"
@@ -37,7 +57,7 @@ let
     dontInstall = true;
 
     outputHashMode = "recursive";
-    outputHash = "sha256-HUSspxQJMc7ayPvTaRUfy/XUE+yTZirXQJVLj7oWN48=";
+    outputHash = "sha256-EWC3IQF2X4pOjKWcTwLsork2fW1S7yQLl0JBYMOOeqQ=";
   };
 
   runtimeDeps = [ pkgs.ffmpeg ];
