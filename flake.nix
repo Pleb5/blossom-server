@@ -30,21 +30,18 @@
           )
         );
 
-      sourceExclusions = [
-        ".git"
-        ".planning"
-        ".claude"
-        "data"
-        "flake.nix"
-        "flake.lock"
-        "nix"
-        "node_modules"
-        "vendor"
-      ];
-
-      src = nixpkgs.lib.cleanSourceWith {
-        src = ./.;
-        filter = path: _type: !(nixpkgs.lib.elem (baseNameOf path) sourceExclusions);
+      # Exactly what the package build needs, listed explicitly so unrelated
+      # files — planning notes, tests, .env files, `nix build` result symlinks,
+      # the built public/client.js — can never change the derivation.
+      src = nixpkgs.lib.fileset.toSource {
+        root = ./.;
+        fileset = nixpkgs.lib.fileset.unions [
+          ./main.ts
+          ./deno.json
+          ./deno.lock
+          ./src
+          ./public/favicon.ico
+        ];
       };
     in
     {
