@@ -1,44 +1,9 @@
-/**
- * BUD-05: PUT /media — Upload and optimize a media blob
- *         HEAD /media — Preflight check (BUD-06 style)
- *
- * Key differences from PUT /upload:
- *   - Auth verb is "media" (not "upload")
- *   - Body is written to a temp file, then optimized/transcoded before storage
- *   - Stored blob is the *optimized* derivative, not the original
- *   - Returned hash is the hash of the *optimized* output
- *   - x-tag verification is STRICT and POST-BODY (original hash must be in x tags)
- *   - Dedup short-circuit via media_derivatives table (original → optimized mapping)
- *
- * PUT /media pipeline:
- *  1.  config.media.enabled → 403
- *  2.  config.media.requireAuth → requireAuth(ctx, "media") → 401/403
- *  3.  Content-Length required → 411 (cancel body)
- *  4.  Content-Length > config.media.maxSize → 413 (cancel body)
- *  5.  Content-Type MIME allowlist check → 415 (cancel body)
- *  6.  X-SHA-256 header format check → 400 (cancel body)
- *  7.  Pool availability → 503 (cancel body)
- *  8.  Generate tmpPath, dispatch stream to worker
- *  9.  Await { hash: originalHash, size } from worker
- * 10.  Strict x-tag check against originalHash (required for /media)
- * 11.  Short-circuit dedup: getMediaDerivative(originalHash) → return existing
- * 12.  optimizeMedia(tmpPath, config.media) → optimizedTmpPath
- * 13.  Remove original tmpPath
- * 14.  Re-hash optimizedTmpPath → optimizedHash + optimizedSize
- * 15.  Detect MIME of optimized output
- * 16.  Dedup: hasBlob(optimizedHash) → rename done elsewhere, add owner + mapping
- * 17.  Atomic rename optimizedTmpPath → <storageDir>/<optimizedHash>[.<ext>]
- * 18.  insertBlob() + insertMediaDerivative()
- * 19.  Return BlobDescriptor JSON
- */
-
 import { Hono } from "@hono/hono";
 import { HTTPException } from "@hono/hono/http-exception";
 import type { Client } from "@libsql/client";
 import { crypto as stdCrypto } from "@std/crypto";
 import { encodeHex } from "@std/encoding/hex";
-import { typeByExtension } from "@std/media-types";
-import { extension as extFromMime } from "@std/media-types";
+import { extension as extFromMime, typeByExtension } from "@std/media-types";
 import { ulid } from "@std/ulid";
 import {
   getBlob,
@@ -69,11 +34,6 @@ import {
   requiresCommunityWhitelist,
 } from "../access/guard.ts";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-/** BUD-02 Blob Descriptor */
 interface BlobDescriptor {
   url: string;
   sha256: string;
@@ -84,20 +44,19 @@ interface BlobDescriptor {
   nip94?: Nip94Tag[];
 }
 
-// ---------------------------------------------------------------------------
-// Helpers (mirrors upload.ts — kept local for route self-containment)
-// ---------------------------------------------------------------------------
-
 function mimeToExt(mime: string | null): string {
   if (!mime || mime === "application/octet-stream") return "";
   return extFromMime(mime) ?? "";
 }
 
-/**
- * Compute SHA-256 and total byte size of a file by streaming it in chunks.
- * Uses stdCrypto.subtle.digest() with a ReadableStream — no full-file allocation.
- * The stream is tee()'d so we can count bytes via a TransformStream and hash simultaneously.
- */
+async function* streamChunks(
+  stream: ReadableStream<Uint8Array>,
+): AsyncIterable<Uint8Array<ArrayBuffer>> {
+  for await (const chunk of stream) {
+    yield new Uint8Array(chunk);
+  }
+}
+
 async function hashFile(
   filePath: string,
 ): Promise<{ hash: string; size: number }> {
@@ -112,22 +71,14 @@ async function hashFile(
     },
   });
 
-  // Drain s2 through counting transform (discard output), hash s1 concurrently
   const [hashBuf] = await Promise.all([
-    stdCrypto.subtle.digest(
-      "SHA-256",
-      s1 as unknown as AsyncIterable<Uint8Array<ArrayBuffer>>,
-    ),
+    stdCrypto.subtle.digest("SHA-256", streamChunks(s1)),
     s2.pipeThrough(countingTransform).pipeTo(new WritableStream()),
   ]);
 
   return { hash: encodeHex(new Uint8Array(hashBuf)), size };
 }
 
-/**
- * Detect MIME type of the optimized output from its file extension.
- * Falls back to "application/octet-stream" if the extension is unknown.
- */
 function detectOptimizedMime(filePath: string): string {
   const dotExt = filePath.match(/\.([^.]+)$/)?.[1];
   if (!dotExt) return "application/octet-stream";
@@ -168,6 +119,7 @@ async function prepareThumbnail(
     inputPath,
     inputType,
     config.media.thumbnail,
+    config.media.tmpDir,
   );
   try {
     const { hash, size } = await hashFile(path);
@@ -260,10 +212,6 @@ async function createAndStoreThumbnail(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Router
-// ---------------------------------------------------------------------------
-
 export function buildMediaRouter(
   db: Client,
   storage: IBlobStorage,
@@ -271,14 +219,9 @@ export function buildMediaRouter(
 ): Hono<{ Variables: BlossomVariables }> {
   const app = new Hono<{ Variables: BlossomVariables }>();
 
-  // -------------------------------------------------------------------------
-  // HEAD /media — BUD-06-style preflight
-  // -------------------------------------------------------------------------
-
   // Hono does not support HEAD-only routes directly; register as GET and
   // the framework strips the body automatically for HEAD requests.
   app.get("/media", async (ctx) => {
-    // --- 1. Feature flag ---
     if (!config.media.enabled) {
       return errorResponse(
         ctx,
@@ -287,7 +230,6 @@ export function buildMediaRouter(
       );
     }
 
-    // --- 2. Auth ---
     let auth: ReturnType<typeof requireAuth> | undefined;
     if (
       config.media.requireAuth || requiresCommunityWhitelist(config, "write")
@@ -315,7 +257,6 @@ export function buildMediaRouter(
       return accessError;
     }
 
-    // --- 3. Pool availability ---
     if (getPool().available === 0) {
       return errorResponse(
         ctx,
@@ -324,7 +265,6 @@ export function buildMediaRouter(
       );
     }
 
-    // --- 4. Content-Length preflight check ---
     const xContentLength = ctx.req.header("x-content-length") ??
       ctx.req.header("content-length");
     if (xContentLength) {
@@ -338,7 +278,6 @@ export function buildMediaRouter(
       }
     }
 
-    // --- 5. Content-Type preflight check ---
     const xContentType = ctx.req.header("x-content-type") ??
       ctx.req.header("content-type");
     if (xContentType) {
@@ -367,10 +306,6 @@ export function buildMediaRouter(
     return ctx.body(null, 200);
   });
 
-  // -------------------------------------------------------------------------
-  // PUT /media — BUD-05 upload with optimization
-  // -------------------------------------------------------------------------
-
   app.put("/media", async (ctx) => {
     const reqId = ulid();
     const debugPrefix = `[media:${reqId}]`;
@@ -380,7 +315,6 @@ export function buildMediaRouter(
     let optimizedTmpPath: string | null = null;
 
     try {
-      // --- 1. Feature flag ---
       if (!config.media.enabled) {
         debug(debugPrefix, "rejected: media endpoint disabled");
         return errorResponse(
@@ -390,7 +324,6 @@ export function buildMediaRouter(
         );
       }
 
-      // --- 2. Auth ---
       let auth: ReturnType<typeof requireAuth> | undefined;
       if (
         config.media.requireAuth || requiresCommunityWhitelist(config, "write")
@@ -432,7 +365,6 @@ export function buildMediaRouter(
         `PUT /media — pubkey=${auth?.pubkey?.slice(0, 8) ?? "anon"}`,
       );
 
-      // --- 3. Content-Length required ---
       const contentLengthHeader = ctx.req.header("content-length");
       if (!contentLengthHeader) {
         await ctx.req.raw.body?.cancel();
@@ -450,7 +382,6 @@ export function buildMediaRouter(
         return errorResponse(ctx, 400, "Invalid Content-Length header");
       }
 
-      // --- 4. Size check ---
       if (contentLength > config.media.maxSize) {
         await ctx.req.raw.body?.cancel();
         debug(
@@ -464,7 +395,6 @@ export function buildMediaRouter(
         );
       }
 
-      // --- 5. MIME allowlist check via storage rules ---
       const contentType = ctx.req.header("content-type") ??
         "application/octet-stream";
       const mimeType = contentType.split(";")[0].trim();
@@ -493,7 +423,6 @@ export function buildMediaRouter(
         );
       }
 
-      // --- 6. X-SHA-256 header format ---
       const xSha256 = ctx.req.header("x-sha-256")?.toLowerCase() ?? null;
       if (xSha256 && !/^[0-9a-f]{64}$/.test(xSha256)) {
         await ctx.req.raw.body?.cancel();
@@ -501,7 +430,6 @@ export function buildMediaRouter(
         return errorResponse(ctx, 400, "Invalid X-SHA-256 header format");
       }
 
-      // --- 7. Pool availability ---
       const body = ctx.req.raw.body;
       if (!body) {
         debug(debugPrefix, "rejected: empty request body");
@@ -519,9 +447,6 @@ export function buildMediaRouter(
         );
       }
 
-      // --- 8. Begin write session + dispatch stream to worker ---
-      // beginWrite() allocates a local tmp file. For S3 this is in s3.tmpDir;
-      // zero bytes reach S3 until commitFile() is called after optimization.
       const session = await storage.beginWrite(contentLength);
       tmpPath = session.tmpPath;
       debug(
@@ -545,7 +470,6 @@ export function buildMediaRouter(
         );
       }
 
-      // --- 9. Await worker result ---
       let originalHash: string;
       let _originalSize: number;
       try {
@@ -566,8 +490,6 @@ export function buildMediaRouter(
         return errorResponse(ctx, 400, msg);
       }
 
-      // --- 10. Strict x-tag check (REQUIRED for /media, post-body) ---
-      // /media always requires x tags — unlike /upload where they're optional.
       if (auth) {
         const xTags = auth.tags.filter((t) => t[0] === "x");
         if (xTags.length === 0) {
@@ -595,7 +517,6 @@ export function buildMediaRouter(
         }
       }
 
-      // --- 11. Short-circuit dedup via media_derivatives ---
       const existingOptimizedHash = await getMediaDerivative(db, originalHash);
       if (existingOptimizedHash) {
         await Deno.remove(tmpPath).catch(() => {});
@@ -646,10 +567,6 @@ export function buildMediaRouter(
         // Derivative record exists but blob was pruned — fall through to re-optimize
       }
 
-      // --- 12. Optimize ---
-      // tmpPath is guaranteed non-null here: it was assigned at step 8 and
-      // cleared only in early-return branches above (worker error, x-tag fail,
-      // derivative dedup return). Any early return above exits the function.
       const origTmpPath = tmpPath!;
       debug(
         debugPrefix,
@@ -663,14 +580,11 @@ export function buildMediaRouter(
         return errorResponse(ctx, 422, msg);
       }
 
-      // --- 13. Remove original temp (no longer needed) ---
       await Deno.remove(origTmpPath).catch(() => {});
       tmpPath = null;
 
-      // optimizedTmpPath is guaranteed non-null from this point (assigned in step 12)
       const optPath = optimizedTmpPath!;
 
-      // --- 14. Re-hash the optimized output ---
       let optimizedHash: string;
       let optimizedSize: number;
       try {
@@ -693,11 +607,9 @@ export function buildMediaRouter(
         );
       }
 
-      // --- 15. Detect MIME of optimized output ---
       const optimizedMime = detectOptimizedMime(optPath);
       const optimizedExt = mimeToExt(optimizedMime);
 
-      // --- 16. Dedup: optimized blob already stored ---
       if (await hasBlob(db, optimizedHash)) {
         debug(
           debugPrefix,
@@ -759,13 +671,6 @@ export function buildMediaRouter(
         optimizedTmpPath = null;
       }
 
-      // --- 17. Commit optimized file to storage ---
-      // For local: atomic rename. For S3: stream optimized file to bucket, delete local copy.
-      // commitFile() handles dedup internally (no-op if blob already exists).
-      //
-      // Extract pixel dimensions from the optimized file *before* commit —
-      // commitFile() consumes optPath (rename for local, upload+delete for S3).
-      // Best-effort: null on any failure.
       const optimizedType = optimizedMime !== "application/octet-stream"
         ? optimizedMime
         : null;
@@ -795,7 +700,6 @@ export function buildMediaRouter(
       }
       optimizedTmpPath = null;
 
-      // --- 18. Insert metadata + derivative mapping ---
       const now = Math.floor(Date.now() / 1000);
       const blobRecord = {
         sha256: optimizedHash,
@@ -829,7 +733,6 @@ export function buildMediaRouter(
         }
       }
 
-      // --- 19. Return BlobDescriptor ---
       debug(
         debugPrefix,
         `media upload complete — ${optimizedHash} (${optimizedSize} bytes, ${optimizedMime})`,

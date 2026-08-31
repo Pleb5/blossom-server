@@ -8,10 +8,6 @@
 
 import type { StorageRule } from "../config/schema.ts";
 
-// ---------------------------------------------------------------------------
-// Duration parsing
-// ---------------------------------------------------------------------------
-
 /** Seconds per named unit. Month = 30 days, year = 365 days. */
 const DURATION_UNITS: Record<string, number> = {
   second: 1,
@@ -46,10 +42,6 @@ export function parseDuration(s: string): number {
   }
   return count * multiplier;
 }
-
-// ---------------------------------------------------------------------------
-// MIME matching helpers
-// ---------------------------------------------------------------------------
 
 /**
  * Returns true if a MIME type matches a rule's type pattern.
@@ -87,10 +79,6 @@ export function mimeToSqlLike(ruleType: string): string {
   if (ruleType.endsWith("/*")) return ruleType.slice(0, -1) + "%"; // "image/*" → "image/%"
   return ruleType;
 }
-
-// ---------------------------------------------------------------------------
-// Upload gate
-// ---------------------------------------------------------------------------
 
 /**
  * Find the first storage rule that matches the given MIME type and pubkey.

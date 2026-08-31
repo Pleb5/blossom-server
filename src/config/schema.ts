@@ -32,7 +32,7 @@ const S3StorageSchema = z.object({
   endpoint: z
     .string()
     .describe(
-      'S3-compatible endpoint URL, e.g. "https://s3.amazonaws.com" or "https://nyc3.digitaloceanspaces.com".',
+      "S3-compatible endpoint URL.",
     ),
   bucket: z.string().describe("Name of the S3 bucket to store blobs in."),
   accessKey: z.string().describe(
@@ -351,6 +351,12 @@ const MediaSchema = z.object({
     .default(1024 * 1024 * 1024)
     .describe(
       "Maximum input file size in bytes before reading the body. Default: 1 GB.",
+    ),
+  tmpDir: z
+    .string()
+    .default("./data/media-tmp")
+    .describe(
+      "Local directory used for optimized media and thumbnail temp files before committing them to the configured storage backend.",
     ),
   image: ImageOptimizeSchema.optional()
     .transform((v) => v ?? ImageOptimizeSchema.parse({}))

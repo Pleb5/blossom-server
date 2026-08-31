@@ -616,6 +616,62 @@ Deno.test({
 });
 
 Deno.test({
+  name: "PUT /upload: dedup hit drains the request body rather than cancelling",
+  async fn() {
+    const body = new TextEncoder().encode("drain-on-dedup payload");
+    const hash = await sha256Hex(body);
+
+    // Seed the blob so the next upload takes the dedup path.
+    const seed = await fetchNoAuth("/upload", {
+      method: "PUT",
+      headers: {
+        "Content-Length": String(body.byteLength),
+        "Content-Type": "application/octet-stream",
+        "X-SHA-256": hash,
+      },
+      body: body.slice(),
+    });
+    assertEquals(seed.status, 201);
+
+    // Re-upload with a streaming body that records whether it was cancelled.
+    // Cancelling a body the client is still sending resets the request stream,
+    // which Firefox reports as NS_ERROR_NET_PARTIAL_TRANSFER even though this
+    // path returns 200 — so the dedup response must consume the stream.
+    let cancelled = false;
+    let offset = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (offset >= body.byteLength) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(body.slice(offset, offset + 8));
+        offset += 8;
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    const res = await fetchNoAuth("/upload", {
+      method: "PUT",
+      headers: {
+        "Content-Length": String(body.byteLength),
+        "Content-Type": "application/octet-stream",
+        "X-SHA-256": hash,
+      },
+      body: stream,
+    });
+
+    assertEquals(res.status, 200);
+    await res.json();
+    assertEquals(cancelled, false);
+    assertEquals(offset >= body.byteLength, true);
+  },
+  ...testOpts,
+});
+
+Deno.test({
   name: "GET /list/:pubkey returns full valid blob URLs using request scheme",
   async fn() {
     const listDb = await initDb({ path: join(tmpDir, "list-url-test.db") });

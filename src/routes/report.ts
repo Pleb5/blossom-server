@@ -1,17 +1,3 @@
-/**
- * BUD-09: PUT /report — Submit a blob report
- *
- * The request body MUST be a signed NIP-56 kind:1984 Nostr event containing
- * one or more x tags with the SHA-256 hashes of the blobs being reported.
- *
- * One database row is written per (event_id, blob) pair, so a single report
- * event covering multiple blobs produces multiple rows.
- *
- * No BUD-11 authentication is required — the report itself is a signed Nostr
- * event (kind:1984), so the submitter's identity is already cryptographically
- * established by the event signature.
- */
-
 import { Hono } from "@hono/hono";
 import type { Client } from "@libsql/client";
 import type { NostrEvent } from "nostr-tools";
@@ -21,17 +7,31 @@ import { errorResponse } from "../middleware/errors.ts";
 import { insertReport, REPORT_TYPES } from "../db/reports.ts";
 import type { ReportType } from "../db/reports.ts";
 
-/** 64 lowercase hex chars — matches a valid SHA-256 digest. */
 const SHA256_RE = /^[0-9a-f]{64}$/;
+
+function isStringTagArray(value: unknown): value is string[][] {
+  return Array.isArray(value) &&
+    value.every((tag) =>
+      Array.isArray(tag) && tag.every((part) => typeof part === "string")
+    );
+}
+
+function isReportEvent(value: Record<string, unknown>): value is NostrEvent {
+  return value.kind === 1984 &&
+    typeof value.id === "string" &&
+    typeof value.pubkey === "string" &&
+    typeof value.created_at === "number" &&
+    typeof value.content === "string" &&
+    typeof value.sig === "string" &&
+    isStringTagArray(value.tags);
+}
 
 export function buildReportRouter(
   db: Client,
 ): Hono<{ Variables: BlossomVariables }> {
   const app = new Hono<{ Variables: BlossomVariables }>();
 
-  // ── PUT /report ─────────────────────────────────────────────────────────────
   app.put("/report", async (ctx) => {
-    // ── 1. Parse body as JSON ─────────────────────────────────────────────────
     let body: unknown;
     try {
       body = await ctx.req.json();
@@ -45,26 +45,17 @@ export function buildReportRouter(
 
     const event = body as Record<string, unknown>;
 
-    // ── 3. Validate kind ──────────────────────────────────────────────────────
     if (event.kind !== 1984) {
       return errorResponse(ctx, 400, "Report event must be kind 1984");
     }
 
-    // ── 4. Validate required NIP-01 fields are present ────────────────────────
-    if (
-      typeof event.id !== "string" ||
-      typeof event.pubkey !== "string" ||
-      typeof event.created_at !== "number" ||
-      typeof event.sig !== "string" ||
-      !Array.isArray(event.tags)
-    ) {
+    if (!isReportEvent(event)) {
       return errorResponse(ctx, 400, "Report event is missing required fields");
     }
 
-    // ── 5. Verify signature ───────────────────────────────────────────────────
     let verified = false;
     try {
-      verified = verifyEvent(event as unknown as NostrEvent);
+      verified = verifyEvent(event);
     } catch {
       verified = false;
     }
@@ -72,9 +63,7 @@ export function buildReportRouter(
       return errorResponse(ctx, 400, "Report event signature is invalid");
     }
 
-    // ── 6. Extract x tags ────────────────────────────────────────────────────
-    const tags = event.tags as unknown[][];
-    const xTags = tags.filter((t) =>
+    const xTags = event.tags.filter((t) =>
       Array.isArray(t) && t[0] === "x" && typeof t[1] === "string"
     ) as [
       string,
@@ -90,11 +79,10 @@ export function buildReportRouter(
       );
     }
 
-    // ── 7. Validate each hash and insert rows ─────────────────────────────────
-    const eventId = event.id as string;
-    const reporter = event.pubkey as string;
-    const content = typeof event.content === "string" ? event.content : "";
-    const created = event.created_at as number;
+    const eventId = event.id;
+    const reporter = event.pubkey;
+    const content = event.content;
+    const created = event.created_at;
 
     const invalidHashes = xTags.filter((t) => !SHA256_RE.test(t[1]));
     if (invalidHashes.length > 0) {
@@ -105,7 +93,6 @@ export function buildReportRouter(
       );
     }
 
-    // Insert one row per x tag. INSERT OR IGNORE makes this idempotent.
     for (const [, blobHash, reportType] of xTags) {
       const type =
         reportType && (REPORT_TYPES as readonly string[]).includes(reportType)

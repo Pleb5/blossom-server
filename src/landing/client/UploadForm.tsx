@@ -1,8 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "@hono/hono/jsx/dom";
 import type { BlobDescriptor, FileStatus, UploadFile } from "./types.ts";
 import { blobExists, HttpError, preflightUpload, xhrUpload } from "./api.ts";
-import { hashBatch, MAX_X_TAGS_PER_EVENT, signBatch } from "./auth.ts";
-import { createClientId, friendlyErrorMessage, isMediaFile } from "./helpers.ts";
+import {
+  getNostrProvider,
+  hashBatch,
+  MAX_X_TAGS_PER_EVENT,
+  signBatch,
+} from "./auth.ts";
+import {
+  createClientId,
+  friendlyErrorMessage,
+  isMediaFile,
+} from "./helpers.ts";
 import { FileRow } from "./FileRow.tsx";
 
 const MAX_RETRIES = 3;
@@ -235,7 +244,6 @@ export function UploadForm({
         (id, status) => patchFile(id, { status }),
       );
 
-      // Phase 1: Preflight all files concurrently
       const toUpload: UploadFile[] = [];
       const preflightBatch = async (uf: UploadFile) => {
         const proceed = await checkOne(uf, hashes.get(uf.id)!, undefined);
@@ -247,7 +255,6 @@ export function UploadForm({
         );
       }
 
-      // Phase 2: Upload files that passed preflight
       const uploadWithSlot = (uf: UploadFile) => {
         activeCount.current = (activeCount.current ?? 0) + 1;
         return uploadOne(uf, undefined).finally(() => {
@@ -262,8 +269,7 @@ export function UploadForm({
       return;
     }
 
-    // deno-lint-ignore no-explicit-any
-    const nostr = (globalThis as any).nostr;
+    const nostr = getNostrProvider();
     if (!nostr) {
       for (const uf of pending) {
         patchFile(uf.id, {

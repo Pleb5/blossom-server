@@ -38,6 +38,7 @@ import { getPool, WorkerJobError } from "../workers/pool.ts";
 import type { Config } from "../config/schema.ts";
 import { mimeToExt } from "../utils/mime.ts";
 import { type Nip94Tag, nip94Tags, optionalNip94Tags } from "../utils/nip94.ts";
+import { drainBody } from "../utils/streams.ts";
 import { getBaseUrl, getBlobUrl } from "../utils/url.ts";
 import { getFileRule } from "../prune/rules.ts";
 import {
@@ -63,10 +64,6 @@ export function buildUploadRouter(
   config: Config,
 ): Hono<{ Variables: BlossomVariables }> {
   const app = new Hono<{ Variables: BlossomVariables }>();
-
-  // ---------------------------------------------------------------------------
-  // HEAD /upload — BUD-06 preflight
-  // ---------------------------------------------------------------------------
 
   // Hono routes HEAD requests through GET handlers (app.on("HEAD",...) is not
   // supported). We register this as GET /upload and check the method inside.
@@ -125,9 +122,6 @@ export function buildUploadRouter(
       );
     }
 
-    // --- Storage rule check (preflight) ---
-    // storage.rules is the upload gate. auth may not be populated for HEAD
-    // (auth is optional in preflight), so pass pubkey only when available.
     const preflightPubkey = auth?.pubkey;
     const rule = getFileRule(
       { mimeType: xContentType, pubkey: preflightPubkey },
@@ -149,7 +143,6 @@ export function buildUploadRouter(
       );
     }
 
-    // Check pool availability
     if (getPool().available === 0) {
       return errorResponse(ctx, 503, "Server busy, try again later");
     }
@@ -162,10 +155,6 @@ export function buildUploadRouter(
     return ctx.body(null, 200);
   });
 
-  // ---------------------------------------------------------------------------
-  // PUT /upload — BUD-02 upload
-  // ---------------------------------------------------------------------------
-
   app.put("/upload", async (ctx) => {
     const reqId = ulid();
     const debugPrefix = `[upload:${reqId}]`;
@@ -175,7 +164,6 @@ export function buildUploadRouter(
       return errorResponse(ctx, 403, "Uploads are disabled on this server");
     }
 
-    // --- 1. Auth ---
     let auth: ReturnType<typeof requireAuth> | undefined;
     if (
       config.upload.requireAuth || requiresCommunityWhitelist(config, "write")
@@ -217,7 +205,6 @@ export function buildUploadRouter(
       `PUT /upload — pubkey=${auth?.pubkey?.slice(0, 8) ?? "anon"}`,
     );
 
-    // --- 2. Content-Length required (411 if absent) ---
     const contentLengthHeader = ctx.req.header("content-length");
     if (!contentLengthHeader) {
       await ctx.req.raw.body?.cancel();
@@ -235,7 +222,6 @@ export function buildUploadRouter(
       return errorResponse(ctx, 400, "Invalid Content-Length header");
     }
 
-    // --- 3. Size check (413 before reading body) ---
     if (contentLength > config.upload.maxSize) {
       await ctx.req.raw.body?.cancel();
       debug(
@@ -249,7 +235,6 @@ export function buildUploadRouter(
       );
     }
 
-    // --- 4. MIME type check / storage rule gate ---
     const contentType = ctx.req.header("content-type") ??
       "application/octet-stream";
     const mimeType = contentType.split(";")[0].trim();
@@ -279,7 +264,6 @@ export function buildUploadRouter(
       );
     }
 
-    // --- 5. X-SHA-256 validation + auth x-tag check ---
     const xSha256 = ctx.req.header("x-sha-256")?.toLowerCase() ?? null;
     if (xSha256 && !/^[0-9a-f]{64}$/.test(xSha256)) {
       await ctx.req.raw.body?.cancel();
@@ -307,11 +291,13 @@ export function buildUploadRouter(
     // Derive file extension from MIME type — used for on-disk filename and URL
     const ext = mimeToExt(mimeType);
 
-    // --- 6. Dedup: if blob already exists, skip the whole write ---
     if (xSha256 && (await hasBlob(db, xSha256))) {
-      await ctx.req.raw.body?.cancel();
       const existing = await getBlob(db, xSha256);
       if (existing) {
+        // Drain, don't cancel — this returns 200 and the client may still be
+        // sending. See drainBody(). Only reached when the client skipped the
+        // BUD-06 preflight that exists to avoid this transfer.
+        await drainBody(ctx.req.raw.body);
         debug(
           debugPrefix,
           `dedup hit — returning existing blob ${xSha256.slice(0, 8)}`,
@@ -342,7 +328,6 @@ export function buildUploadRouter(
       }
     }
 
-    // --- 7. Acquire worker (503 if pool full — no queue) ---
     const body = ctx.req.raw.body;
     if (!body) {
       debug(debugPrefix, "rejected: empty request body");
@@ -360,11 +345,6 @@ export function buildUploadRouter(
       );
     }
 
-    // --- 8. Begin write session + dispatch to worker ---
-    // beginWrite() allocates a local tmp file on disk. For local storage this
-    // is inside the blobs dir (.tmp/). For S3 storage this is in the configured
-    // s3.tmpDir. The worker writes directly to session.tmpPath — zero bytes
-    // reach S3 until commitWrite() is called after hash verification.
     const session = await storage.beginWrite(contentLength);
 
     debug(
@@ -396,7 +376,6 @@ export function buildUploadRouter(
       );
     }
 
-    // --- 9. Await worker result ---
     let hash: string;
     let size: number;
     try {
@@ -420,8 +399,6 @@ export function buildUploadRouter(
       return errorResponse(ctx, 400, msg);
     }
 
-    // --- 9b. Deferred x-tag check (when X-SHA-256 was not sent upfront) ---
-    // Now that we have the real hash, validate the scoped token can authorize it.
     if (auth && !xSha256) {
       try {
         requireXTag(auth, hash);
@@ -436,14 +413,6 @@ export function buildUploadRouter(
       }
     }
 
-    // --- 10. Commit: move verified tmp file to final storage location ---
-    // For local storage: atomic Deno.rename() to <hash>.<ext>.
-    // For S3 storage: stream the verified local tmp file to S3, then delete it.
-    // commitWrite() handles dedup internally (no-op if blob already exists).
-    //
-    // Extract pixel dimensions from the verified temp file *before* commit —
-    // after commitWrite() the temp file is consumed (renamed for local,
-    // uploaded+deleted for S3). Best-effort: null on any failure.
     const blobType = mimeType !== "application/octet-stream" ? mimeType : null;
     const dim = await extractDimensions(session.tmpPath, blobType);
     debug(debugPrefix, `dim=${dim ?? "none"}`);
@@ -459,7 +428,6 @@ export function buildUploadRouter(
       throw err;
     }
 
-    // --- 11. Insert metadata ---
     const now = Math.floor(Date.now() / 1000);
     const blobRecord = {
       sha256: hash,
@@ -474,7 +442,6 @@ export function buildUploadRouter(
     const t3 = Date.now();
     debug(debugPrefix, `insertBlob complete elapsed=${t3 - t2}ms`);
 
-    // --- 12. Return BlobDescriptor ---
     debug(
       debugPrefix,
       `upload complete — ${hash} (${size} bytes, ${

@@ -42,20 +42,12 @@ async function detectMimeType(filePath: string): Promise<string | null> {
   }
 }
 
-/**
- * Detects, validates, and optimizes/transcodes the file at inputPath.
- * Returns the path to the optimized output temp file.
- *
- * Throws Error("Unsupported file type") if the MIME type cannot be determined
- * or is not a supported image/video type.
- *
- * Wraps the full pipeline in try/catch; on failure deletes any partial output
- * temp file before rethrowing with "Optimization failed: <message>" prefix.
- */
 export async function optimizeMedia(
   inputPath: string,
   config: MediaConfig,
 ): Promise<string> {
+  await Deno.mkdir(config.tmpDir, { recursive: true });
+
   const mime = await detectMimeType(inputPath);
 
   if (!mime) {
@@ -67,20 +59,19 @@ export async function optimizeMedia(
   try {
     if (mime === "image/gif") {
       const { optimizeGif } = await import("./image.ts");
-      outputPath = await optimizeGif(inputPath, config.image);
+      outputPath = await optimizeGif(inputPath, config.image, config.tmpDir);
     } else if (
       mime === "image/jpeg" || mime === "image/png" || mime === "image/webp"
     ) {
       const { optimizeImage } = await import("./image.ts");
-      outputPath = await optimizeImage(inputPath, config.image);
+      outputPath = await optimizeImage(inputPath, config.image, config.tmpDir);
     } else if (mime.startsWith("video/")) {
       const { optimizeVideo } = await import("./video.ts");
-      outputPath = await optimizeVideo(inputPath, config.video);
+      outputPath = await optimizeVideo(inputPath, config.video, config.tmpDir);
     } else {
       throw new Error(`Unsupported file type: ${mime}`);
     }
   } catch (err) {
-    // Clean up any partial output before rethrowing
     if (outputPath) {
       await Deno.remove(outputPath).catch(() => {});
     }

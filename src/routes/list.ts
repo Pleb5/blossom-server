@@ -48,7 +48,6 @@ export function buildListRouter(
   const app = new Hono<{ Variables: BlossomVariables }>();
 
   app.get("/list/:pubkey", async (ctx) => {
-    // --- Enabled gate ---
     if (!config.list.enabled) {
       return errorResponse(
         ctx,
@@ -57,9 +56,6 @@ export function buildListRouter(
       );
     }
 
-    // --- Auth ---
-    // Always call optionalAuth first to capture any supplied credential.
-    // If requireAuth is true, enforce it via requireAuth() which throws 401/403.
     let auth: ReturnType<typeof optionalAuth>;
     if (config.list.requireAuth || requiresCommunityWhitelist(config, "read")) {
       try {
@@ -83,7 +79,6 @@ export function buildListRouter(
     );
     if (accessError) return accessError;
 
-    // --- Pubkey validation ---
     const pubkey = ctx.req.param("pubkey").toLowerCase();
     if (!HEX_PUBKEY_RE.test(pubkey)) {
       return errorResponse(
@@ -93,9 +88,6 @@ export function buildListRouter(
       );
     }
 
-    // --- allowListOthers enforcement ---
-    // When disabled, an authenticated caller may only list their own blobs.
-    // Unauthenticated callers are always rejected when this guard is active.
     if (!config.list.allowListOthers) {
       if (!auth) {
         return errorResponse(ctx, 401, "Authorization required to list blobs");
@@ -105,7 +97,6 @@ export function buildListRouter(
       }
     }
 
-    // --- Query parameter parsing ---
     const rawLimit = ctx.req.query("limit");
     const rawSince = ctx.req.query("since");
     const rawUntil = ctx.req.query("until");
@@ -138,7 +129,6 @@ export function buildListRouter(
       );
     }
 
-    // --- DB query ---
     const blobs = await listBlobsByPubkey(db, pubkey, {
       limit,
       cursor,
@@ -146,7 +136,6 @@ export function buildListRouter(
       until,
     });
 
-    // --- Build response ---
     const baseUrl = getBaseUrl(ctx.req.raw, config.publicDomain);
     const descriptors: BlobDescriptor[] = await Promise.all(
       blobs.map(async (b) => {

@@ -118,7 +118,6 @@ export function buildAdminRouter(
 
   // ── JSON action endpoints ───────────────────────────────────────────────────
 
-  // DELETE /api/blobs/:sha256 — force-delete a blob and its file
   app.delete("/api/blobs/:sha256", async (c) => {
     const sha256 = c.req.param("sha256");
     const blob = await getBlob(db, sha256);

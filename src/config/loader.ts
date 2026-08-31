@@ -29,6 +29,10 @@ export async function loadConfig(configPath = "config.yml"): Promise<Config> {
   } catch (err) {
     if (err instanceof Deno.errors.NotFound) {
       console.warn(`Config file not found at "${configPath}", using defaults.`);
+    } else if (err instanceof Deno.errors.IsADirectory) {
+      console.warn(
+        `Config path "${configPath}" is a directory, using defaults.`,
+      );
     } else {
       throw err;
     }

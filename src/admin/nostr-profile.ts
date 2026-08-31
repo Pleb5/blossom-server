@@ -1,14 +1,3 @@
-/**
- * Nostr profile metadata lookup for the admin dashboard.
- *
- * Exports bare module-level singletons following the standard applesauce
- * pattern. The event loader is wired at module-load time; lookup relays are
- * held in a BehaviorSubject so they can be updated at any point without
- * recreating the loader.
- *
- * This module is only imported when the admin dashboard is enabled.
- */
-
 import { castUser } from "applesauce-common/casts";
 import { EventStore } from "applesauce-core/event-store";
 import type { ProfileContent } from "applesauce-core/helpers";

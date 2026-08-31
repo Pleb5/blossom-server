@@ -61,3 +61,18 @@ export interface MirrorItem {
   result?: BlobDescriptor;
   error?: string;
 }
+
+export interface NostrProvider {
+  signEvent(event: UnsignedNostrEvent): Promise<unknown>;
+}
+
+export interface UnsignedNostrEvent {
+  kind: number;
+  content: string;
+  created_at: number;
+  tags: string[][];
+}
+
+declare global {
+  var nostr: NostrProvider | undefined;
+}

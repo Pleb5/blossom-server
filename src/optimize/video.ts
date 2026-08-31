@@ -78,8 +78,12 @@ async function probeFps(inputPath: string): Promise<number | null> {
 export async function optimizeVideo(
   inputPath: string,
   opts: VideoOptimizeConfig,
+  tmpDir: string,
 ): Promise<string> {
-  const outputPath = await Deno.makeTempFile({ suffix: `.${opts.format}` });
+  const outputPath = await Deno.makeTempFile({
+    dir: tmpDir,
+    suffix: `.${opts.format}`,
+  });
   const crf = Math.round(51 - (opts.quality / 100) * 51);
   const extraArgs = FORMAT_EXTRA_ARGS[opts.format] ?? [];
 

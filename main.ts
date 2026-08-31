@@ -150,7 +150,6 @@ if (pruneEnabled) {
   pruneTimeout = setTimeout(runPrune, config.prune.initialDelayMs);
 }
 
-// Start server
 const server = Deno.serve(
   {
     hostname: config.host,

@@ -1,11 +1,8 @@
-// ---------------------------------------------------------------------------
-// MirrorForm — URL input + mirror queue for BUD-04 PUT /mirror.
-// ---------------------------------------------------------------------------
 
 import { useCallback, useEffect, useRef, useState } from "@hono/hono/jsx/dom";
 import type { MirrorItem, MirrorStatus } from "./types.ts";
 import { HttpError, mirrorPut } from "./api.ts";
-import { MAX_X_TAGS_PER_EVENT, signBatch } from "./auth.ts";
+import { getNostrProvider, MAX_X_TAGS_PER_EVENT, signBatch } from "./auth.ts";
 import { createClientId, parseBlossomRef } from "./helpers.ts";
 import { MirrorRow } from "./MirrorRow.tsx";
 
@@ -149,8 +146,7 @@ export function MirrorForm({
       return;
     }
 
-    // deno-lint-ignore no-explicit-any
-    const nostr = (globalThis as any).nostr;
+    const nostr = getNostrProvider();
     if (!nostr) {
       for (const it of pending) {
         patchItem(it.id, {
@@ -208,7 +204,6 @@ export function MirrorForm({
   const existsCount = items.filter((it) => it.status === "exists").length;
   const errorCount = items.filter((it) => it.status === "error").length;
 
-  // ---- Phase: input --------------------------------------------------------
   if (phase === "input") {
     return (
       <div class="p-6 space-y-4">
@@ -245,7 +240,6 @@ export function MirrorForm({
     );
   }
 
-  // ---- Phase: list ---------------------------------------------------------
   return (
     <div class="p-6 space-y-4">
       <div class="flex items-center justify-between">

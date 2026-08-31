@@ -80,7 +80,6 @@ export function buildDeleteRouter(
       // Remove only this pubkey's ownership record
       await removeOwner(db, hash, pubkey);
 
-      // Check whether any other owners remain
       const remaining = await countOwners(db, hash);
 
       if (remaining > 0) {

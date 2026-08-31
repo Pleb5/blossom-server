@@ -88,7 +88,9 @@ export interface IBlobStorage {
    * Used by the media route after optimization: the optimized file is on local
    * disk and needs to be committed to the final storage location.
    *
-   * For local: atomically renames srcPath to <hash>.<ext> (or <hash> if ext is empty).
+   * For local: renames srcPath to <hash>.<ext> when possible. If srcPath is on
+   * another filesystem, copies through a destination-side temp file, then atomically
+   * renames that temp file into place.
    * For S3: streams srcPath to S3 as the final object key, then removes srcPath.
    *
    * @param srcPath Absolute path to the source file on local disk.

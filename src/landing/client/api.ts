@@ -86,7 +86,7 @@ export function xhrUpload(
           reject(new Error("Invalid server response"));
         }
       } else {
-        const xReason = xhr.getResponseHeader("X-Reason") ?? undefined;
+        const xReason = xhr.getResponseHeader("X-Reason");
         const retryAfter = parseRetryAfter(
           xhr.getResponseHeader("Retry-After"),
         );
@@ -128,7 +128,7 @@ export async function mirrorPut(
     body: JSON.stringify({ url: blobUrl }),
   });
   if (!res.ok) {
-    const xReason = res.headers.get("X-Reason") ?? undefined;
+    const xReason = res.headers.get("X-Reason");
     const retryAfter = parseRetryAfter(res.headers.get("Retry-After"));
     throw new HttpError(
       res.status,

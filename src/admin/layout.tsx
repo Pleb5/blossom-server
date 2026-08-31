@@ -142,30 +142,43 @@ export const Badge: FC<{ children?: Child; color?: string }> = (
   );
 };
 
-export const DangerButton: FC<{
+interface ButtonProps {
   onclick: string;
   children?: Child;
-}> = ({ onclick, children }) => (
+}
+
+interface ActionButtonProps extends ButtonProps {
+  className: string;
+}
+
+const ActionButton: FC<ActionButtonProps> = (
+  { onclick, className, children },
+) => (
   <button
     type="button"
     onclick={onclick}
-    class="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-red-950 text-red-400 hover:bg-red-900 hover:text-red-300 transition-colors cursor-pointer border border-red-900"
+    class={`inline-flex items-center px-2.5 py-1 rounded text-xs font-medium transition-colors cursor-pointer border ${className}`}
   >
     {children}
   </button>
 );
 
-export const SecondaryButton: FC<{
-  onclick: string;
-  children?: Child;
-}> = ({ onclick, children }) => (
-  <button
-    type="button"
+export const DangerButton: FC<ButtonProps> = ({ onclick, children }) => (
+  <ActionButton
     onclick={onclick}
-    class="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-white transition-colors cursor-pointer border border-gray-700"
+    className="bg-red-950 text-red-400 hover:bg-red-900 hover:text-red-300 border-red-900"
   >
     {children}
-  </button>
+  </ActionButton>
+);
+
+export const SecondaryButton: FC<ButtonProps> = ({ onclick, children }) => (
+  <ActionButton
+    onclick={onclick}
+    className="bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-white border-gray-700"
+  >
+    {children}
+  </ActionButton>
 );
 
 export const EmptyState: FC<{ message: string }> = ({ message }) => (

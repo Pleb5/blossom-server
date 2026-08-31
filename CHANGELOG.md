@@ -1,5 +1,23 @@
 # blossom-server
 
+## 6.3.0
+
+### Minor Changes
+
+- Add reproducible Nix flake packaging with a development shell, package build,
+  app wrapper, and CI flake checks.
+- Add a configurable media temporary directory and make local storage commits
+  work across filesystems.
+- Clean up scanner-reported AI slop and lint findings without changing runtime
+  behavior.
+
+## 6.2.1
+
+### Patch Changes
+
+- Drain request bodies on `/upload` dedup hits instead of cancelling them so
+  large re-uploads can receive the successful 200 response reliably.
+
 ## 6.2.0
 
 ### Minor Changes
