@@ -15,6 +15,11 @@ Deno.test("ConfigSchema: media thumbnail defaults are enabled", () => {
   assertEquals(config.media.thumbnail.videoSeek, 1);
 });
 
+Deno.test("ConfigSchema: mirror body timeout is finite by default", () => {
+  const config = ConfigSchema.parse({});
+  assertEquals(config.mirror.bodyTimeout, 300_000);
+});
+
 Deno.test("loadConfig: directory config path uses defaults", async () => {
   const dir = await Deno.makeTempDir();
   const configPath = join(dir, "config.yml");

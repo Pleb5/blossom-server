@@ -1,25 +1,16 @@
 /**
- * Two-phase streaming write session.
+ * Two-phase streaming write session managed by an upload worker.
  *
  * Usage:
  *   const session = await storage.beginWrite(contentLength);
- *   await requestBody.pipeTo(session.writable);
+ *   await pool.dispatch(requestBody, session.tmpPath, ...);
  *   await storage.commitWrite(session, computedHash, ext);
  *
  * If anything goes wrong before commitWrite:
  *   await storage.abortWrite(session);
  */
 export interface WriteSession {
-  /** Write body bytes into this stream. Close it when done. */
-  writable: WritableStream<Uint8Array>;
-  /** Resolves (or rejects) when writable is fully closed/errored. */
-  done: Promise<void>;
-  /**
-   * Absolute path to the local temp file where bytes are being written.
-   * The upload worker receives this path and opens the file for writing
-   * directly (bypassing the writable stream). The storage adapter uses it
-   * internally for commitWrite / abortWrite cleanup.
-   */
+  /** Absolute path the upload worker opens for writing. */
   tmpPath: string;
 }
 

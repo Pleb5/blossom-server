@@ -359,6 +359,7 @@ export function buildUploadRouter(
       session.tmpPath,
       contentLength,
       xSha256,
+      config.upload.maxSize,
     );
     if (!jobPromise) {
       // Race condition: another request claimed the last worker between
@@ -395,6 +396,9 @@ export function buildUploadRouter(
       debug(debugPrefix, `worker error — ${msg}`);
       if (err instanceof WorkerJobError && err.errorType === "HASH_MISMATCH") {
         return errorResponse(ctx, 409, msg);
+      }
+      if (err instanceof WorkerJobError && err.errorType === "TOO_LARGE") {
+        return errorResponse(ctx, 413, msg);
       }
       return errorResponse(ctx, 400, msg);
     }

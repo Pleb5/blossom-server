@@ -94,39 +94,9 @@ export class LocalStorage implements IBlobStorage {
     return Promise.resolve(null);
   }
 
-  async beginWrite(sizeHint: number | null): Promise<WriteSession> {
+  beginWrite(_sizeHint: number | null): Promise<WriteSession> {
     const path = this.tmpPath(ulid());
-
-    const file = await Deno.open(path, {
-      write: true,
-      create: true,
-      truncate: true,
-    });
-
-    // Pipe-friendly WritableStream backed by the file
-    const writable = file.writable;
-
-    // done resolves when the writable stream is closed (file fully written)
-    // writable.closed is a Promise that resolves when the stream is closed
-    const done: Promise<void> =
-      (writable as WritableStream & { closed?: Promise<void> }).closed ??
-        new Promise<void>((resolve) => {
-          // Fallback: poll — but Deno file.writable should have .closed
-          const interval = setInterval(async () => {
-            try {
-              const stat = await Deno.stat(path);
-              if (sizeHint !== null && stat.size >= sizeHint) {
-                clearInterval(interval);
-                resolve();
-              }
-            } catch {
-              clearInterval(interval);
-              resolve();
-            }
-          }, 100);
-        });
-
-    return { tmpPath: path, writable, done };
+    return Promise.resolve({ tmpPath: path });
   }
 
   async commitWrite(

@@ -399,9 +399,9 @@ const MirrorSchema = z
       .number()
       .int()
       .min(0)
-      .default(0)
+      .default(300_000)
       .describe(
-        "Timeout in milliseconds for the entire body transfer from the origin server after headers have been received. 0 = no timeout (default, recommended for large blobs). Set a value only if you need a hard cap on total mirror duration.",
+        "Timeout in milliseconds for the entire body transfer from the origin server after headers have been received. 0 disables the timeout. Default: 300 000 ms.",
       ),
   })
   .transform((v) => {

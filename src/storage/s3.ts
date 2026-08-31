@@ -167,36 +167,9 @@ export class S3Storage implements IBlobStorage {
    * Begin a write session. The body is written to local disk only.
    * Zero bytes are sent to S3 until commitWrite() is called.
    */
-  async beginWrite(sizeHint: number | null): Promise<WriteSession> {
+  beginWrite(_sizeHint: number | null): Promise<WriteSession> {
     const path = this.tmpPath(ulid());
-
-    const file = await Deno.open(path, {
-      write: true,
-      create: true,
-      truncate: true,
-    });
-
-    const writable = file.writable;
-
-    // done resolves when the writable stream is closed (file fully written).
-    const done: Promise<void> =
-      (writable as WritableStream & { closed?: Promise<void> }).closed ??
-        new Promise<void>((resolve) => {
-          const interval = setInterval(async () => {
-            try {
-              const stat = await Deno.stat(path);
-              if (sizeHint !== null && stat.size >= sizeHint) {
-                clearInterval(interval);
-                resolve();
-              }
-            } catch {
-              clearInterval(interval);
-              resolve();
-            }
-          }, 100);
-        });
-
-    return { tmpPath: path, writable, done };
+    return Promise.resolve({ tmpPath: path });
   }
 
   /**

@@ -185,7 +185,7 @@ mirror:
   # Timeout (ms) for the full body transfer after headers have been received.
   # 0 = no timeout (default — recommended for large blobs such as videos).
   # Set a value only if you need a hard cap on total mirror duration.
-  bodyTimeout: 0
+  bodyTimeout: 300000
 
 # ---------------------------------------------------------------------------
 # Delete  (BUD-02)

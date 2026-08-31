@@ -196,6 +196,7 @@ export class UploadWorkerPool {
    * @param tmpPath   Temp file path the worker should write to.
    * @param sizeHint  Content-Length value, or null if unknown.
    * @param xSha256   Declared hash from X-SHA-256 header, or null.
+   * @param maxBytes  Maximum number of streamed bytes accepted.
    *
    * @returns A Promise that resolves to { hash, size } on success,
    *          or null if no worker has capacity (caller should return 503).
@@ -205,6 +206,7 @@ export class UploadWorkerPool {
     tmpPath: string,
     sizeHint: number | null,
     xSha256: string | null,
+    maxBytes: number,
   ): Promise<UploadJobResult> | null {
     // Find all workers with remaining capacity, then pick the one with the
     // lowest current throughput (least I/O load). Workers that have never
@@ -225,7 +227,7 @@ export class UploadWorkerPool {
 
     // Transfer the stream to the worker — zero-copy, no tee on the main thread.
     candidate.worker.postMessage(
-      { type: "job", id, stream, tmpPath, sizeHint, xSha256 },
+      { type: "job", id, stream, tmpPath, sizeHint, xSha256, maxBytes },
       transferStream(stream),
     );
 

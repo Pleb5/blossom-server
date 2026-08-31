@@ -33,6 +33,7 @@ interface JobMessage {
   tmpPath: string;
   sizeHint: number | null;
   xSha256: string | null;
+  maxBytes: number;
 }
 
 interface JobSuccess {
@@ -42,7 +43,13 @@ interface JobSuccess {
 }
 
 /** Discriminated error types for status code mapping on the main thread. */
-type WorkerErrorType = "HASH_MISMATCH" | "WRITE_ERROR" | "UNKNOWN";
+type WorkerErrorType =
+  | "HASH_MISMATCH"
+  | "TOO_LARGE"
+  | "WRITE_ERROR"
+  | "UNKNOWN";
+
+class SizeLimitError extends Error {}
 
 interface JobError {
   id: string;
@@ -86,7 +93,7 @@ self.onmessage = async (event: MessageEvent<InitMessage | JobMessage>) => {
 };
 
 async function handleJob(msg: JobMessage): Promise<void> {
-  const { id, stream, tmpPath, xSha256 } = msg;
+  const { id, stream, tmpPath, xSha256, maxBytes } = msg;
 
   let file: Deno.FsFile | null = null;
 
@@ -110,23 +117,27 @@ async function handleJob(msg: JobMessage): Promise<void> {
     // interleaves them cooperatively at every chunk boundary. Under disk
     // backpressure, the tee internal queue rate-limits s1 to match disk speed —
     // correct behaviour, not a deadlock.
-    const [s1, s2] = stream.tee();
-
     let totalSize = 0;
     const countingTransform = new TransformStream<Uint8Array, Uint8Array>({
       transform(chunk, controller) {
         totalSize += chunk.byteLength;
+        if (totalSize > maxBytes) {
+          throw new SizeLimitError(
+            `Upload exceeds maximum size of ${maxBytes} bytes`,
+          );
+        }
         _bytesThisWindow += chunk.byteLength;
         controller.enqueue(chunk);
       },
     });
+    const [s1, s2] = stream.pipeThrough(countingTransform).tee();
 
     const [hashBuffer] = await Promise.all([
       stdCrypto.subtle.digest(
         "SHA-256",
         s1 as ReadableStream<Uint8Array<ArrayBuffer>>,
       ),
-      s2.pipeThrough(countingTransform).pipeTo(file.writable),
+      s2.pipeTo(file.writable),
     ]);
     file = null; // writable closed by pipeTo
 
@@ -155,7 +166,7 @@ async function handleJob(msg: JobMessage): Promise<void> {
       {
         id,
         error: err instanceof Error ? err.message : String(err),
-        errorType: "UNKNOWN",
+        errorType: err instanceof SizeLimitError ? "TOO_LARGE" : "UNKNOWN",
       } satisfies JobError,
     );
   }

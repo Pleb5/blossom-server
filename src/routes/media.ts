@@ -454,7 +454,13 @@ export function buildMediaRouter(
         `dispatching to worker — size=${contentLength} mime=${mimeType}`,
       );
 
-      const jobPromise = pool.dispatch(body, tmpPath, contentLength, xSha256);
+      const jobPromise = pool.dispatch(
+        body,
+        tmpPath,
+        contentLength,
+        xSha256,
+        config.media.maxSize,
+      );
       if (!jobPromise) {
         await body.cancel().catch(() => {});
         await storage.abortWrite(session).catch(() => {});
@@ -486,6 +492,9 @@ export function buildMediaRouter(
           err instanceof WorkerJobError && err.errorType === "HASH_MISMATCH"
         ) {
           return errorResponse(ctx, 409, msg);
+        }
+        if (err instanceof WorkerJobError && err.errorType === "TOO_LARGE") {
+          return errorResponse(ctx, 413, msg);
         }
         return errorResponse(ctx, 400, msg);
       }

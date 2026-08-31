@@ -40,7 +40,7 @@ import type { BlossomVariables } from "../middleware/auth.ts";
 import { debug } from "../middleware/debug.ts";
 import { errorResponse } from "../middleware/errors.ts";
 import type { IBlobStorage } from "../storage/interface.ts";
-import { getPool } from "../workers/pool.ts";
+import { getPool, WorkerJobError } from "../workers/pool.ts";
 import type { Config } from "../config/schema.ts";
 import { mimeToExt } from "../utils/mime.ts";
 import { type Nip94Tag, nip94Tags, optionalNip94Tags } from "../utils/nip94.ts";
@@ -51,6 +51,7 @@ import {
   requiresCommunityWhitelist,
 } from "../access/guard.ts";
 import { extractDimensions } from "../optimize/dimensions.ts";
+import { assertPublicMirrorUrl } from "../utils/mirror-url.ts";
 
 /** BUD-02 Blob Descriptor (same shape as upload route) */
 interface BlobDescriptor {
@@ -63,46 +64,43 @@ interface BlobDescriptor {
   nip94?: Nip94Tag[];
 }
 
-/** Returns true if a dotted-decimal IPv4 string falls in a private/loopback range. */
-function isPrivateIPv4(ip: string): boolean {
-  const parts = ip.split(".").map(Number);
-  if (parts.length !== 4 || parts.some((p) => isNaN(p) || p < 0 || p > 255)) {
-    return false; // not a valid IPv4 — let the fetch attempt fail naturally
-  }
-  const [a, b] = parts;
-  return (
-    a === 127 || // 127.0.0.0/8   loopback
-    a === 10 || // 10.0.0.0/8    RFC-1918
-    (a === 172 && b >= 16 && b <= 31) || // 172.16.0.0/12 RFC-1918
-    (a === 192 && b === 168) || // 192.168.0.0/16 RFC-1918
-    (a === 169 && b === 254) || // 169.254.0.0/16 link-local
-    a === 0 // 0.0.0.0/8
-  );
-}
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_REDIRECTS = 5;
 
-/** Returns true if a colon-hex IPv6 string is loopback (::1) or unspecified (::). */
-function isPrivateIPv6(ip: string): boolean {
-  // Normalise: strip brackets if present (e.g. [::1])
-  const bare = ip.replace(/^\[|\]$/g, "");
-  return bare === "::1" || bare === "::" ||
-    bare.toLowerCase() === "0:0:0:0:0:0:0:1";
-}
+async function fetchMirrorUrl(
+  initialUrl: URL,
+  connectTimeout: number,
+): Promise<Response> {
+  let url = initialUrl;
+  for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
+    await assertPublicMirrorUrl(url);
 
-/**
- * Best-effort SSRF guard for literal IP addresses in the URL hostname.
- * Hostname-based DNS rebinding is out of scope — the fetch timeout is the
- * primary mitigation for that class of attack.
- *
- * Returns an error string if the hostname is a disallowed IP, or null if OK.
- */
-function checkSsrf(hostname: string): string | null {
-  if (isPrivateIPv4(hostname)) {
-    return `Mirror URL points to a private IPv4 address: ${hostname}`;
+    const controller = new AbortController();
+    const timer = connectTimeout > 0
+      ? setTimeout(() => controller.abort(), connectTimeout)
+      : null;
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        redirect: "manual",
+        signal: controller.signal,
+      });
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+    }
+
+    if (!REDIRECT_STATUSES.has(response.status)) return response;
+    await response.body?.cancel();
+    const location = response.headers.get("location");
+    if (!location) {
+      throw new Error("Origin redirect is missing a Location header");
+    }
+    if (redirects === MAX_REDIRECTS) {
+      throw new Error("Origin returned too many redirects");
+    }
+    url = new URL(location, url);
   }
-  if (isPrivateIPv6(hostname)) {
-    return `Mirror URL points to a loopback IPv6 address: ${hostname}`;
-  }
-  return null;
+  throw new Error("Origin returned too many redirects");
 }
 
 export function buildMirrorRouter(
@@ -186,22 +184,12 @@ export function buildMirrorRouter(
       }`,
     );
 
-    if (mirrorUrl.protocol !== "http:" && mirrorUrl.protocol !== "https:") {
-      debug(
-        debugPrefix,
-        `rejected: unsupported scheme — ${mirrorUrl.protocol}`,
-      );
-      return errorResponse(
-        ctx,
-        400,
-        `Unsupported URL scheme: ${mirrorUrl.protocol}. Only http and https are allowed`,
-      );
-    }
-
-    const ssrfError = checkSsrf(mirrorUrl.hostname);
-    if (ssrfError) {
-      debug(debugPrefix, `rejected: SSRF guard — ${ssrfError}`);
-      return errorResponse(ctx, 400, ssrfError);
+    try {
+      await assertPublicMirrorUrl(mirrorUrl);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : "Invalid mirror URL";
+      debug(debugPrefix, `rejected: SSRF guard — ${reason}`);
+      return errorResponse(ctx, 400, reason);
     }
 
     if (getPool().available === 0) {
@@ -220,36 +208,10 @@ export function buildMirrorRouter(
     const t0 = Date.now();
     let originResponse: Response;
     try {
-      if (config.mirror.connectTimeout > 0) {
-        // Race fetch against a timeout. The AbortController is only used to
-        // cancel the network request when the timeout wins — it is never
-        // associated with the response body stream.
-        const connectAbort = new AbortController();
-        let connectTimerId: ReturnType<typeof setTimeout>;
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          connectTimerId = setTimeout(() => {
-            connectAbort.abort();
-            reject(
-              new Error(
-                `Origin server did not respond within ${config.mirror.connectTimeout}ms`,
-              ),
-            );
-          }, config.mirror.connectTimeout);
-        });
-        try {
-          const fetchPromise = fetch(mirrorUrl.toString(), {
-            signal: connectAbort.signal,
-          });
-          // Suppress the unhandled rejection that occurs when the timeout wins
-          // and connectAbort cancels the in-flight fetch.
-          fetchPromise.catch(() => {});
-          originResponse = await Promise.race([fetchPromise, timeoutPromise]);
-        } finally {
-          clearTimeout(connectTimerId!);
-        }
-      } else {
-        originResponse = await fetch(mirrorUrl.toString());
-      }
+      originResponse = await fetchMirrorUrl(
+        mirrorUrl,
+        config.mirror.connectTimeout,
+      );
       const t1 = Date.now();
       debug(
         debugPrefix,
@@ -387,6 +349,7 @@ export function buildMirrorRouter(
       session.tmpPath,
       contentLength,
       null,
+      config.upload.maxSize,
     );
     if (!jobPromise) {
       // Race: another request claimed the last worker between step 6 and now.
@@ -430,6 +393,9 @@ export function buildMirrorRouter(
         ? `Body transfer from origin exceeded ${config.mirror.bodyTimeout}ms`
         : errMsg || "Mirror failed";
       debug(debugPrefix, `worker error — ${msg}`);
+      if (err instanceof WorkerJobError && err.errorType === "TOO_LARGE") {
+        return errorResponse(ctx, 413, msg);
+      }
       return errorResponse(ctx, 502, msg);
     }
 
@@ -458,7 +424,7 @@ export function buildMirrorRouter(
         return errorResponse(
           ctx,
           403,
-          `Auth token does not authorize mirroring blob ${hash}`,
+          "Mirrored content does not match the authorized hash",
         );
       }
     }
@@ -551,6 +517,7 @@ export function buildMirrorRouter(
           tags: blobRecord.nip94,
         }),
       } satisfies BlobDescriptor,
+      201,
     );
   });
 
