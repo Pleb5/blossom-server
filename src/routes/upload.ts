@@ -122,6 +122,27 @@ export function buildUploadRouter(
       );
     }
 
+    if (xSha256 && !/^[0-9a-f]{64}$/i.test(xSha256)) {
+      return errorResponse(ctx, 400, "Invalid X-SHA-256 header format");
+    }
+    if (auth) {
+      if (!xSha256) {
+        return errorResponse(
+          ctx,
+          403,
+          "Authenticated preflight requires X-SHA-256",
+        );
+      }
+      try {
+        requireXTag(auth, xSha256.toLowerCase());
+      } catch (err) {
+        if (err instanceof HTTPException) {
+          return errorResponse(ctx, 403, err.message);
+        }
+        throw err;
+      }
+    }
+
     const preflightPubkey = auth?.pubkey;
     const rule = getFileRule(
       { mimeType: xContentType, pubkey: preflightPubkey },

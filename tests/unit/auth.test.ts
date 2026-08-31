@@ -98,13 +98,26 @@ Deno.test("parseAuthEvent: rejects event with wrong kind", () => {
 // ---------------------------------------------------------------------------
 
 Deno.test("parseAuthEvent: rejects event with created_at in the future", () => {
-  const future = Math.floor(Date.now() / 1000) + 9999;
+  const future = Math.floor(Date.now() / 1000) + 60;
   const event = makeEvent({ created_at: future });
   assertThrows(
     () => parseAuthEvent(encodeEvent(event), null),
     HTTPException,
     "future",
   );
+});
+
+Deno.test("parseAuthEvent: rejects malformed expiration tags", () => {
+  for (const expiration of ["not-a-time", "9999999999junk"]) {
+    const event = makeEvent({
+      tags: [["t", "upload"], ["expiration", expiration]],
+    });
+    assertThrows(
+      () => parseAuthEvent(encodeEvent(event), null),
+      HTTPException,
+      "expiration",
+    );
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -274,10 +287,9 @@ Deno.test("requireAuth: returns event when auth and type match", () => {
 const TEST_HASH = "a".repeat(64);
 const OTHER_HASH = "b".repeat(64);
 
-Deno.test("requireXTag: no x tags → no throw (open auth event)", () => {
+Deno.test("requireXTag: no x tags throws 403", () => {
   const event = makeEvent({});
-  // Should not throw — open upload token
-  requireXTag(event, TEST_HASH);
+  assertThrows(() => requireXTag(event, TEST_HASH), HTTPException);
 });
 
 Deno.test("requireXTag: x tag present and hash matches → no throw", () => {

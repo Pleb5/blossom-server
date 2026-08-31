@@ -85,10 +85,9 @@ export function parseAuthEvent(
   if (auth.kind !== 24242) {
     throw new HTTPException(400, { message: "Auth event must be kind 24242" });
   }
-  const drift = auth.created_at - now;
-  if (drift > 60) {
+  if (!Number.isSafeInteger(auth.created_at) || auth.created_at > now) {
     throw new HTTPException(400, {
-      message: `Auth event created_at is ${drift}s in the future`,
+      message: "Auth event created_at must not be in the future",
     });
   }
 
@@ -98,7 +97,10 @@ export function parseAuthEvent(
       message: "Auth event missing expiration tag",
     });
   }
-  if (parseInt(expiration, 10) < now) {
+  if (!/^\d+$/.test(expiration) || !Number.isSafeInteger(Number(expiration))) {
+    throw new HTTPException(400, { message: "Invalid expiration tag" });
+  }
+  if (Number(expiration) <= now) {
     throw new HTTPException(401, { message: "Auth token expired" });
   }
 
@@ -165,13 +167,12 @@ export function authMiddleware(
       } catch (err) {
         debug("[auth]", "Auth parse error", err);
 
-        // Parse failure: leave auth undefined, let route handlers decide
-        // if auth is required they will reject; if optional they won't care
+        // Parse failure leaves auth undefined. Protected routes reject it via
+        // requireAuth while public routes continue as unauthenticated.
         if (!(err instanceof HTTPException)) {
           console.warn("Auth parse error:", err);
           throw new HTTPException(500, { message: "Internal server error" });
-        } // Else pass through the HTTPException
-        else throw err;
+        }
       }
     }
     await next();
@@ -219,7 +220,7 @@ export function optionalAuth(
  */
 export function requireXTag(auth: NostrEvent, hash: string): void {
   const xTags = auth.tags.filter((t) => t[0] === "x");
-  if (xTags.length > 0 && !xTags.some((t) => t[1] === hash)) {
+  if (xTags.length === 0 || !xTags.some((t) => t[1] === hash)) {
     throw new HTTPException(403, {
       message: `Auth token does not authorize operation on blob ${hash}`,
     });

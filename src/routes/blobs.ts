@@ -93,7 +93,9 @@ export function buildBlobsRouter(
       "Content-Type": mimeType,
       "Content-Length": String(blob.size),
       "Accept-Ranges": "bytes",
-      "Cache-Control": "public, max-age=31536000, immutable",
+      "Cache-Control": requiresCommunityWhitelist(config, "read")
+        ? "private, no-store"
+        : "public, max-age=31536000, immutable",
       ETag: `"${hash}"`,
       "Last-Modified": new Date(blob.uploaded * 1000).toUTCString(),
     };

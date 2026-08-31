@@ -379,10 +379,9 @@ Deno.test({
 });
 
 Deno.test({
-  name: "PUT /upload: with correct auth and open x-tag returns 201",
+  name: "PUT /upload: auth without an x tag returns 403",
   async fn() {
     const body = new TextEncoder().encode("authenticated upload");
-    // Open token — no x tags, permits any blob
     const auth = makeUploadAuth({});
 
     const res = await fetchWithAuth("/upload", {
@@ -394,10 +393,7 @@ Deno.test({
       },
       body,
     });
-    assertEquals(res.status, 201);
-    const json = await res.json();
-    assertEquals(typeof json.sha256, "string");
-    assertEquals(json.sha256.length, 64);
+    assertEquals(res.status, 403);
   },
   ...testOpts,
 });
@@ -686,7 +682,7 @@ Deno.test({
 
     const body = new TextEncoder().encode("list url coverage");
     const hash = await sha256Hex(body);
-    const auth = makeUploadAuth({});
+    const auth = makeUploadAuth({ hash });
 
     const uploadRes = await listApp.fetch(
       new Request("https://localhost/upload", {

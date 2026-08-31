@@ -16,7 +16,7 @@ import {
   insertMediaThumbnail,
   isOwner,
 } from "../db/blobs.ts";
-import { requireAuth } from "../middleware/auth.ts";
+import { requireAuth, requireXTag } from "../middleware/auth.ts";
 import type { BlossomVariables } from "../middleware/auth.ts";
 import { debug } from "../middleware/debug.ts";
 import { errorResponse } from "../middleware/errors.ts";
@@ -267,6 +267,27 @@ export function buildMediaRouter(
 
     const xContentLength = ctx.req.header("x-content-length") ??
       ctx.req.header("content-length");
+    const xSha256 = ctx.req.header("x-sha-256")?.toLowerCase();
+    if (xSha256 && !/^[0-9a-f]{64}$/.test(xSha256)) {
+      return errorResponse(ctx, 400, "Invalid X-SHA-256 header format");
+    }
+    if (auth) {
+      if (!xSha256) {
+        return errorResponse(
+          ctx,
+          403,
+          "Authenticated preflight requires X-SHA-256",
+        );
+      }
+      try {
+        requireXTag(auth, xSha256);
+      } catch (err) {
+        if (err instanceof HTTPException) {
+          return errorResponse(ctx, 403, err.message);
+        }
+        throw err;
+      }
+    }
     if (xContentLength) {
       const size = parseInt(xContentLength, 10);
       if (!isNaN(size) && size > config.media.maxSize) {

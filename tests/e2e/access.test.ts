@@ -21,6 +21,7 @@ const communityPubkey = "a".repeat(64);
 const allowedSecretKey = generateSecretKey();
 const deniedSecretKey = generateSecretKey();
 const allowedPubkey = getPublicKey(allowedSecretKey);
+const testHash = "b".repeat(64);
 
 let app: Hono<{ Variables: BlossomVariables }>;
 let cleanup: () => Promise<void>;
@@ -34,6 +35,7 @@ function makeAuth(secretKey: Uint8Array): NostrEvent {
       tags: [
         ["t", "upload"],
         ["expiration", String(now + 600)],
+        ["x", testHash],
       ],
       content: "Upload blob",
     },
@@ -93,6 +95,7 @@ Deno.test({
         headers: {
           "X-Content-Length": "10",
           "X-Content-Type": "application/octet-stream",
+          "X-SHA-256": testHash,
           Authorization: encodeAuth(makeAuth(allowedSecretKey)),
         },
       }),
@@ -112,6 +115,7 @@ Deno.test({
         headers: {
           "X-Content-Length": "10",
           "X-Content-Type": "application/octet-stream",
+          "X-SHA-256": testHash,
           Authorization: encodeAuth(makeAuth(deniedSecretKey)),
         },
       }),
