@@ -1,5 +1,5 @@
 /// <reference lib="deno.worker" />
-import { crypto as stdCrypto } from "@std/crypto";
+import { sha256 } from "@noble/hashes/sha256";
 import { encodeHex } from "@std/encoding/hex";
 import { DbProxy } from "../db/proxy.ts";
 import { DirectDbHandle } from "../db/direct.ts";
@@ -50,6 +50,13 @@ type WorkerErrorType =
   | "UNKNOWN";
 
 class SizeLimitError extends Error {}
+
+async function writeAll(file: Deno.FsFile, chunk: Uint8Array): Promise<void> {
+  let written = 0;
+  while (written < chunk.byteLength) {
+    written += await file.write(chunk.subarray(written));
+  }
+}
 
 interface JobError {
   id: string;
@@ -104,22 +111,13 @@ async function handleJob(msg: JobMessage): Promise<void> {
       truncate: true,
     });
 
-    // Split the stream into two independent branches:
-    //   s1 → digest()    — consumed by the @std/crypto WASM DigestContext
-    //   s2 → pipeTo()    — written to the temp file on disk
-    //
-    // digest("SHA-256", s1) uses the AsyncIterable branch of @std/crypto:
-    //   for await (const chunk of s1) { context.update(chunk) }
-    // Hash state is constant ~104 bytes; no chunk accumulation occurs.
-    //
-    // The size counter runs as a TransformStream on s2 so it never touches s1.
-    // Both branches are driven concurrently by Promise.all(). The event loop
-    // interleaves them cooperatively at every chunk boundary. Under disk
-    // backpressure, the tee internal queue rate-limits s1 to match disk speed —
-    // correct behaviour, not a deadlock.
     let totalSize = 0;
-    const countingTransform = new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
+    const digest = sha256.create();
+    const reader = stream.getReader();
+    try {
+      while (true) {
+        const { done, value: chunk } = await reader.read();
+        if (done) break;
         totalSize += chunk.byteLength;
         if (totalSize > maxBytes) {
           throw new SizeLimitError(
@@ -127,21 +125,16 @@ async function handleJob(msg: JobMessage): Promise<void> {
           );
         }
         _bytesThisWindow += chunk.byteLength;
-        controller.enqueue(chunk);
-      },
-    });
-    const [s1, s2] = stream.pipeThrough(countingTransform).tee();
+        digest.update(chunk);
+        await writeAll(file, chunk);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    file.close();
+    file = null;
 
-    const [hashBuffer] = await Promise.all([
-      stdCrypto.subtle.digest(
-        "SHA-256",
-        s1 as ReadableStream<Uint8Array<ArrayBuffer>>,
-      ),
-      s2.pipeTo(file.writable),
-    ]);
-    file = null; // writable closed by pipeTo
-
-    const hash = encodeHex(new Uint8Array(hashBuffer));
+    const hash = encodeHex(digest.digest());
 
     // Verify against declared hash if provided
     if (xSha256 !== null && hash !== xSha256) {

@@ -131,6 +131,17 @@ export function buildBlobsRouter(
         });
       }
 
+      const publicUrl = !requiresCommunityWhitelist(config, "read")
+        ? storage.publicUrl?.(hash, ext)
+        : null;
+      if (publicUrl) {
+        return ctx.body(null, 307, {
+          Location: publicUrl,
+          "Cache-Control": headers["Cache-Control"],
+          ETag: headers["ETag"],
+        });
+      }
+
       const { start, end } = rangeResult;
       const stream = await readRange(storage, hash, ext, start, end);
       if (!stream) return errorResponse(ctx, 404, "Blob not found in storage");
@@ -142,6 +153,17 @@ export function buildBlobsRouter(
           "Content-Range": `bytes ${start}-${end}/${blob.size}`,
           "Content-Length": String(end - start + 1),
         },
+      });
+    }
+
+    const publicUrl = !requiresCommunityWhitelist(config, "read")
+      ? storage.publicUrl?.(hash, ext)
+      : null;
+    if (publicUrl) {
+      return ctx.body(null, 307, {
+        Location: publicUrl,
+        "Cache-Control": headers["Cache-Control"],
+        ETag: headers["ETag"],
       });
     }
 

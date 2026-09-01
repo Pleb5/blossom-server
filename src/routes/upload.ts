@@ -29,7 +29,7 @@ import { HTTPException } from "@hono/hono/http-exception";
 import type { Client } from "@libsql/client";
 import { ulid } from "@std/ulid";
 import { getBlob, hasBlob, insertBlob, isOwner } from "../db/blobs.ts";
-import { requireAuth, requireXTag } from "../middleware/auth.ts";
+import { optionalAuth, requireAuth, requireXTag } from "../middleware/auth.ts";
 import type { BlossomVariables } from "../middleware/auth.ts";
 import { debug } from "../middleware/debug.ts";
 import { errorResponse } from "../middleware/errors.ts";
@@ -38,7 +38,7 @@ import { getPool, WorkerJobError } from "../workers/pool.ts";
 import type { Config } from "../config/schema.ts";
 import { mimeToExt } from "../utils/mime.ts";
 import { type Nip94Tag, nip94Tags, optionalNip94Tags } from "../utils/nip94.ts";
-import { drainBody } from "../utils/streams.ts";
+import { drainBody, withBodyDeadline } from "../utils/streams.ts";
 import { getBaseUrl, getBlobUrl } from "../utils/url.ts";
 import { getFileRule } from "../prune/rules.ts";
 import {
@@ -86,7 +86,7 @@ export function buildUploadRouter(
         throw err;
       }
     } else {
-      auth = ctx.get("auth");
+      auth = optionalAuth(ctx, "upload");
     }
 
     const accessError = await requireCommunityWhitelist(
@@ -200,7 +200,7 @@ export function buildUploadRouter(
         throw err;
       }
     } else {
-      auth = ctx.get("auth");
+      auth = optionalAuth(ctx, "upload");
     }
 
     const accessError = await requireCommunityWhitelist(
@@ -375,14 +375,20 @@ export function buildUploadRouter(
       }`,
     );
 
-    const jobPromise = pool.dispatch(
+    const deadline = withBodyDeadline(
       body,
+      config.upload.bodyTimeout,
+      `Upload body transfer exceeded ${config.upload.bodyTimeout}ms`,
+    );
+    const jobPromise = pool.dispatch(
+      deadline.stream,
       session.tmpPath,
       contentLength,
       xSha256,
       config.upload.maxSize,
     );
     if (!jobPromise) {
+      deadline.cancel();
       // Race condition: another request claimed the last worker between
       // pool.available check and dispatch(). Rare but safe to handle.
       await body.cancel().catch(() => {});
@@ -406,11 +412,13 @@ export function buildUploadRouter(
         `awaiting worker result hash=${xSha256?.slice(0, 8) ?? "pending"}`,
       );
       ({ hash, size } = await jobPromise);
+      deadline.clear();
       debug(
         debugPrefix,
         `worker complete — hash=${hash.slice(0, 8)} size=${size}`,
       );
     } catch (err) {
+      deadline.cancel(err);
       // Worker already deleted session.tmpPath on failure — abortWrite is a no-op.
       await storage.abortWrite(session).catch(() => {});
       const msg = err instanceof Error ? err.message : "Upload failed";

@@ -146,8 +146,9 @@ export function authMiddleware(
       debug("[auth]", "Found Nostr auth header");
 
       const raw = authHeader.slice("Nostr ".length).trim();
-      const domain = extractHostname(publicDomain) ??
-        ctx.req.header("host")?.split(":")[0]?.toLowerCase() ?? null;
+      // Host is client-controlled and must never define BUD-11 server identity.
+      // An explicit publicDomain is required to accept server-scoped tokens.
+      const domain = extractHostname(publicDomain);
 
       debug("[auth]", "Extracted domain", domain);
 
@@ -210,8 +211,17 @@ export function requireAuth(
  */
 export function optionalAuth(
   ctx: Context<{ Variables: BlossomVariables }>,
+  verb?: "get" | "upload" | "list" | "delete" | "media",
 ): NostrEvent | undefined {
-  return ctx.get("auth");
+  const auth = ctx.get("auth");
+  if (auth && verb && ctx.get("authType") !== verb) {
+    throw new HTTPException(403, {
+      message: `Auth token type "${
+        ctx.get("authType")
+      }" does not match required "${verb}"`,
+    });
+  }
+  return auth;
 }
 
 /**

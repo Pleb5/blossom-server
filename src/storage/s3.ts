@@ -20,10 +20,9 @@ import { debug } from "../middleware/debug.ts";
  *   <hash>.<ext>   — when ext is non-empty (e.g. "abc123...def.jpg")
  *   <hash>         — when ext is empty
  *
- * If config.publicURL is set, read() returns null and the route layer is
- * expected to redirect the client to the public URL instead of proxying.
- * When publicURL is not set, read() fetches the object from S3 and streams
- * it back zero-copy via response.body.
+ * If config.publicURL is set, the route layer may redirect public reads.
+ * read() and readRange() remain available for protected reads that must be
+ * proxied through Blossom authorization.
  */
 export class S3Storage implements IBlobStorage {
   readonly tmpDir: string;
@@ -82,6 +81,12 @@ export class S3Storage implements IBlobStorage {
     return ext ? `${hash}.${ext}` : hash;
   }
 
+  publicUrl(hash: string, ext: string): string | null {
+    return this.publicURL
+      ? `${this.publicURL}/${this.objectKey(hash, ext)}`
+      : null;
+  }
+
   private tmpPath(id: string): string {
     return join(this.tmpDir, id);
   }
@@ -99,15 +104,6 @@ export class S3Storage implements IBlobStorage {
     hash: string,
     ext: string,
   ): Promise<ReadableStream<Uint8Array> | null> {
-    // If a public CDN URL is configured, the route layer should redirect
-    // rather than proxy. Return null so the route falls through to its redirect
-    // logic. (The blobs route checks storage.read() and, on null with a
-    // publicURL config, should issue a 302. That routing logic lives in the
-    // route, not here — returning null is the correct signal.)
-    if (this.publicURL) {
-      return null;
-    }
-
     try {
       const response = await this.client.getObject(this.objectKey(hash, ext));
       if (!response.body) return null;
@@ -121,9 +117,8 @@ export class S3Storage implements IBlobStorage {
    * Native S3 range read using getPartialObject.
    *
    * Issues a GET request with a Range header directly to S3 — zero bytes
-   * are transferred before `start`. When publicURL is set, returns null
-   * so the route layer can redirect the client (the client will include
-   * its own Range header in the redirect request).
+   * are transferred before `start`. The route layer may redirect public reads,
+   * but protected reads still use this method to keep authorization enforced.
    */
   async readRange(
     hash: string,
@@ -131,12 +126,6 @@ export class S3Storage implements IBlobStorage {
     start: number,
     end: number,
   ): Promise<ReadableStream<Uint8Array> | null> {
-    // With publicURL, the route redirects the client. The client is responsible
-    // for sending its own Range header to the CDN — we must not proxy here.
-    if (this.publicURL) {
-      return null;
-    }
-
     try {
       const response = await this.client.getPartialObject(
         this.objectKey(hash, ext),

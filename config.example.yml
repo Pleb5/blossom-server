@@ -21,9 +21,9 @@ port: 3000
 # Use 127.0.0.1 to accept only loopback connections (behind a local reverse proxy).
 host: 0.0.0.0
 
-# Override the domain used in blob descriptor "url" fields.
-# Defaults to the Host header of each incoming request.
-# Set this when running behind a reverse proxy that rewrites the Host header.
+# Domain used in blob descriptor URLs and BUD-11 server-tag validation.
+# When omitted, blob URLs use the incoming Host header, but server-scoped auth
+# tokens are rejected because Host is not trusted as server identity.
 # IMPORTANT: bare hostname only — do NOT include a protocol scheme (https://).
 # publicDomain: "blobs.example.com"
 
@@ -145,6 +145,9 @@ upload:
   # Requests without Content-Length receive 411 Length Required.
   maxSize: 2147483648 # 2 GB
 
+  # Deadline (ms) for receiving the complete PUT /upload body. 0 disables it.
+  bodyTimeout: 300000
+
   # Number of upload worker threads.
   # 0 = one per CPU core (navigator.hardwareConcurrency).
   # When all workers are at capacity, new uploads receive 503 — there is no queue.
@@ -262,6 +265,9 @@ media:
 
   # Maximum input file size in bytes before reading the body. Default: 1 GB.
   maxSize: 1073741824 # 1 GB
+
+  # Deadline (ms) for receiving the complete PUT /media body. 0 disables it.
+  bodyTimeout: 300000
 
   # Local directory for optimized media and thumbnail temp files before they are
   # committed to storage. Keep this on the same filesystem as storage.local.dir

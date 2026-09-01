@@ -24,6 +24,45 @@ export async function drainBody(
   await body.pipeTo(new WritableStream()).catch(() => {});
 }
 
+export interface DeadlineStream {
+  stream: ReadableStream<Uint8Array>;
+  clear: () => void;
+  cancel: (reason?: unknown) => void;
+}
+
+/** Error a stream if its complete transfer takes longer than `timeoutMs`. */
+export function withBodyDeadline(
+  body: ReadableStream<Uint8Array>,
+  timeoutMs: number,
+  message: string,
+): DeadlineStream {
+  if (timeoutMs <= 0) {
+    return {
+      stream: body,
+      clear: () => {},
+      cancel: (reason) => void body.cancel(reason).catch(() => {}),
+    };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new Error(message)),
+    timeoutMs,
+  );
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  body.pipeTo(writable, { signal: controller.signal }).catch(() => {});
+  return {
+    stream: readable,
+    clear: () => {
+      clearTimeout(timer);
+    },
+    cancel: (reason) => {
+      clearTimeout(timer);
+      controller.abort(reason ?? new Error("Body transfer cancelled"));
+    },
+  };
+}
+
 /**
  * Returns a TransformStream that passes bytes through until exactly `limit`
  * bytes have been forwarded, then closes the readable side.

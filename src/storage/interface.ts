@@ -18,6 +18,9 @@ export interface IBlobStorage {
   /** Returns true if a blob with this hash exists in storage. */
   has(hash: string, ext: string): Promise<boolean>;
 
+  /** Public object URL used to redirect GET/range requests, when configured. */
+  publicUrl?(hash: string, ext: string): string | null;
+
   /**
    * Returns a ReadableStream of the blob's bytes, or null if not found.
    * For local storage: Deno.open → file.readable (zero-copy).
@@ -33,7 +36,8 @@ export interface IBlobStorage {
    *
    * For local storage: Deno.open + file.seek(start) — zero bytes wasted.
    * For S3: getPartialObject with native Range header — no proxy streaming overhead.
-   * For S3 with publicURL: returns null (caller redirects; range header is the client's problem).
+   * S3 still implements this when publicURL is configured so protected reads
+   * can be proxied instead of redirected to public storage.
    *
    * @param start First byte offset (inclusive, 0-based).
    * @param end   Last byte offset (inclusive).

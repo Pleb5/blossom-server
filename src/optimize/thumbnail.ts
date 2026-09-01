@@ -31,29 +31,34 @@ async function thumbnailImage(
     suffix: `.${opts.outputFormat}`,
   });
 
-  let pipeline = sharp(inputPath).rotate().resize(
-    opts.maxWidth,
-    opts.maxHeight,
-    {
-      fit: "inside",
-      withoutEnlargement: true,
-    },
-  );
+  try {
+    let pipeline = sharp(inputPath).rotate().resize(
+      opts.maxWidth,
+      opts.maxHeight,
+      {
+        fit: "inside",
+        withoutEnlargement: true,
+      },
+    );
 
-  switch (opts.outputFormat) {
-    case "webp":
-      pipeline = pipeline.webp({ quality: opts.quality });
-      break;
-    case "jpeg":
-      pipeline = pipeline.jpeg({ quality: opts.quality, progressive: true });
-      break;
-    case "png":
-      pipeline = pipeline.png({ quality: opts.quality, progressive: true });
-      break;
+    switch (opts.outputFormat) {
+      case "webp":
+        pipeline = pipeline.webp({ quality: opts.quality });
+        break;
+      case "jpeg":
+        pipeline = pipeline.jpeg({ quality: opts.quality, progressive: true });
+        break;
+      case "png":
+        pipeline = pipeline.png({ quality: opts.quality, progressive: true });
+        break;
+    }
+
+    await pipeline.toFile(outputPath);
+    return outputPath;
+  } catch (err) {
+    await Deno.remove(outputPath).catch(() => {});
+    throw err;
   }
-
-  await pipeline.toFile(outputPath);
-  return outputPath;
 }
 
 async function thumbnailVideo(
@@ -65,35 +70,40 @@ async function thumbnailVideo(
     dir: tmpDir,
     suffix: `.${opts.outputFormat}`,
   });
-  const args = [
-    "-ss",
-    String(opts.videoSeek),
-    "-i",
-    inputPath,
-    "-frames:v",
-    "1",
-    "-vf",
-    `scale=w='min(${opts.maxWidth},iw)':h='min(${opts.maxHeight},ih)':force_original_aspect_ratio=decrease`,
-    ...ffmpegQuality(opts.outputFormat, opts.quality),
-    "-y",
-    outputPath,
-  ];
+  try {
+    const args = [
+      "-ss",
+      String(opts.videoSeek),
+      "-i",
+      inputPath,
+      "-frames:v",
+      "1",
+      "-vf",
+      `scale=w='min(${opts.maxWidth},iw)':h='min(${opts.maxHeight},ih)':force_original_aspect_ratio=decrease`,
+      ...ffmpegQuality(opts.outputFormat, opts.quality),
+      "-y",
+      outputPath,
+    ];
 
-  const cmd = new Deno.Command("ffmpeg", {
-    args,
-    stdout: "null",
-    stderr: "piped",
-  });
-  const { success, stderr } = await cmd.output();
-  if (!success) {
-    const stderrText = new TextDecoder().decode(stderr);
-    if (stderrText.length > 0) {
-      debug("[ffmpeg thumbnail stderr]\n" + stderrText);
+    const cmd = new Deno.Command("ffmpeg", {
+      args,
+      stdout: "null",
+      stderr: "piped",
+    });
+    const { success, stderr } = await cmd.output();
+    if (!success) {
+      const stderrText = new TextDecoder().decode(stderr);
+      if (stderrText.length > 0) {
+        debug("[ffmpeg thumbnail stderr]\n" + stderrText);
+      }
+      throw new Error("ffmpeg thumbnail extraction failed");
     }
-    throw new Error("ffmpeg thumbnail extraction failed");
-  }
 
-  return outputPath;
+    return outputPath;
+  } catch (err) {
+    await Deno.remove(outputPath).catch(() => {});
+    throw err;
+  }
 }
 
 export async function createThumbnail(

@@ -26,42 +26,47 @@ export async function optimizeImage(
     suffix: `.${opts.outputFormat}`,
   });
 
-  // rotate() normalizes orientation so we can safely strip EXIF
-  let pipeline = sharp(inputPath).rotate();
+  try {
+    // rotate() normalizes orientation so we can safely strip EXIF
+    let pipeline = sharp(inputPath).rotate();
 
-  if (opts.keepExif) {
-    pipeline = pipeline.withMetadata();
-  } else {
-    pipeline = pipeline.withMetadata({ exif: {} });
+    if (opts.keepExif) {
+      pipeline = pipeline.withMetadata();
+    } else {
+      pipeline = pipeline.withMetadata({ exif: {} });
+    }
+
+    // Resize to fit inside the bounding box without upscaling
+    pipeline = pipeline.resize(opts.maxWidth, opts.maxHeight, {
+      fit: "inside",
+      withoutEnlargement: true,
+    });
+
+    // Encode to target format
+    switch (opts.outputFormat) {
+      case "webp":
+        pipeline = pipeline.webp({ quality: opts.quality });
+        break;
+      case "jpeg":
+        pipeline = pipeline.jpeg({
+          quality: opts.quality,
+          progressive: opts.progressive,
+        });
+        break;
+      case "png":
+        pipeline = pipeline.png({
+          quality: opts.quality,
+          progressive: opts.progressive,
+        });
+        break;
+    }
+
+    await pipeline.toFile(outputPath);
+    return outputPath;
+  } catch (err) {
+    await Deno.remove(outputPath).catch(() => {});
+    throw err;
   }
-
-  // Resize to fit inside the bounding box without upscaling
-  pipeline = pipeline.resize(opts.maxWidth, opts.maxHeight, {
-    fit: "inside",
-    withoutEnlargement: true,
-  });
-
-  // Encode to target format
-  switch (opts.outputFormat) {
-    case "webp":
-      pipeline = pipeline.webp({ quality: opts.quality });
-      break;
-    case "jpeg":
-      pipeline = pipeline.jpeg({
-        quality: opts.quality,
-        progressive: opts.progressive,
-      });
-      break;
-    case "png":
-      pipeline = pipeline.png({
-        quality: opts.quality,
-        progressive: opts.progressive,
-      });
-      break;
-  }
-
-  await pipeline.toFile(outputPath);
-  return outputPath;
 }
 
 /**
@@ -81,37 +86,42 @@ export async function optimizeGif(
     suffix: `.${opts.outputFormat}`,
   });
 
-  // animated: true preserves all frames
-  let pipeline = sharp(inputPath, { animated: true }).rotate();
+  try {
+    // animated: true preserves all frames
+    let pipeline = sharp(inputPath, { animated: true }).rotate();
 
-  if (opts.keepExif) {
-    pipeline = pipeline.withMetadata();
-  } else {
-    pipeline = pipeline.withMetadata({ exif: {} });
-  }
+    if (opts.keepExif) {
+      pipeline = pipeline.withMetadata();
+    } else {
+      pipeline = pipeline.withMetadata({ exif: {} });
+    }
 
-  pipeline = pipeline.resize(opts.maxWidth, opts.maxHeight, {
-    fit: "inside",
-    withoutEnlargement: true,
-  });
-
-  if (opts.outputFormat === "webp") {
-    // delay is per-frame delay in ms — derived from the fps cap.
-    // Sharp clamps individual frame delays to this value when they are shorter.
-    const delay = Math.round(1000 / opts.fps);
-    pipeline = pipeline.webp({ quality: opts.quality, delay });
-  } else if (opts.outputFormat === "jpeg") {
-    pipeline = pipeline.jpeg({
-      quality: opts.quality,
-      progressive: opts.progressive,
+    pipeline = pipeline.resize(opts.maxWidth, opts.maxHeight, {
+      fit: "inside",
+      withoutEnlargement: true,
     });
-  } else {
-    pipeline = pipeline.png({
-      quality: opts.quality,
-      progressive: opts.progressive,
-    });
-  }
 
-  await pipeline.toFile(outputPath);
-  return outputPath;
+    if (opts.outputFormat === "webp") {
+      // delay is per-frame delay in ms — derived from the fps cap.
+      // Sharp clamps individual frame delays to this value when they are shorter.
+      const delay = Math.round(1000 / opts.fps);
+      pipeline = pipeline.webp({ quality: opts.quality, delay });
+    } else if (opts.outputFormat === "jpeg") {
+      pipeline = pipeline.jpeg({
+        quality: opts.quality,
+        progressive: opts.progressive,
+      });
+    } else {
+      pipeline = pipeline.png({
+        quality: opts.quality,
+        progressive: opts.progressive,
+      });
+    }
+
+    await pipeline.toFile(outputPath);
+    return outputPath;
+  } catch (err) {
+    await Deno.remove(outputPath).catch(() => {});
+    throw err;
+  }
 }

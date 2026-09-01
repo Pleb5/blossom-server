@@ -18,6 +18,9 @@ Deno.test("ConfigSchema: media thumbnail defaults are enabled", () => {
 Deno.test("ConfigSchema: mirror body timeout is finite by default", () => {
   const config = ConfigSchema.parse({});
   assertEquals(config.mirror.bodyTimeout, 300_000);
+  assertEquals(config.upload.bodyTimeout, 300_000);
+  assertEquals(config.media.bodyTimeout, 300_000);
+  assertEquals(config.publicDomain, "");
 });
 
 Deno.test("loadConfig: directory config path uses defaults", async () => {

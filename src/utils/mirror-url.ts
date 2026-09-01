@@ -3,6 +3,9 @@ type DnsResolver = (
   recordType: "A" | "AAAA",
 ) => Promise<string[]>;
 
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
 function parseIpv4(address: string): number[] | null {
   const parts = address.split(".");
   if (parts.length !== 4 || parts.some((part) => !/^\d{1,3}$/.test(part))) {
@@ -81,10 +84,7 @@ const defaultResolver: DnsResolver = async (hostname, recordType) => {
   return await Deno.resolveDns(hostname, recordType) as string[];
 };
 
-export async function assertPublicMirrorUrl(
-  url: URL,
-  resolver: DnsResolver = defaultResolver,
-): Promise<void> {
+function validateMirrorUrl(url: URL): string {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error(`Unsupported URL scheme: ${url.protocol}`);
   }
@@ -96,12 +96,28 @@ export async function assertPublicMirrorUrl(
   if (hostname === "localhost" || hostname.endsWith(".localhost")) {
     throw new Error("Mirror URL resolves to a non-public address");
   }
+  return hostname;
+}
+
+export async function assertPublicMirrorUrl(
+  url: URL,
+  resolver: DnsResolver = defaultResolver,
+): Promise<void> {
+  await resolvePublicMirrorAddress(url, resolver);
+}
+
+/** Resolve once, validate every answer, and return the address to connect to. */
+export async function resolvePublicMirrorAddress(
+  url: URL,
+  resolver: DnsResolver = defaultResolver,
+): Promise<string> {
+  const hostname = validateMirrorUrl(url);
 
   if (parseIpv4(hostname) || parseIpv6(hostname)) {
     if (!isPublicIpAddress(hostname)) {
       throw new Error("Mirror URL resolves to a non-public address");
     }
-    return;
+    return hostname;
   }
 
   const results = await Promise.allSettled([
@@ -116,5 +132,199 @@ export async function assertPublicMirrorUrl(
   }
   if (addresses.some((address) => !isPublicIpAddress(address))) {
     throw new Error("Mirror URL resolves to a non-public address");
+  }
+  return addresses[0];
+}
+
+async function writeAll(conn: Deno.Conn, bytes: Uint8Array): Promise<void> {
+  let offset = 0;
+  while (offset < bytes.byteLength) {
+    offset += await conn.write(bytes.subarray(offset));
+  }
+}
+
+async function readHeader(conn: Deno.Conn): Promise<Uint8Array> {
+  let bytes = new Uint8Array(0);
+  const chunk = new Uint8Array(4096);
+  while (bytes.byteLength < 64 * 1024) {
+    const count = await conn.read(chunk);
+    if (count === null) throw new Error("Mirror proxy connection closed");
+    const combined = new Uint8Array(bytes.byteLength + count);
+    combined.set(bytes);
+    combined.set(chunk.subarray(0, count), bytes.byteLength);
+    bytes = combined;
+    if (decoder.decode(bytes).includes("\r\n\r\n")) return bytes;
+  }
+  throw new Error("Mirror proxy request headers are too large");
+}
+
+async function connectWithSignal(
+  options: Deno.ConnectOptions,
+  signal?: AbortSignal,
+): Promise<Deno.TcpConn> {
+  if (!signal) return await Deno.connect(options);
+  signal.throwIfAborted();
+
+  const connect = Deno.connect(options);
+  const aborted = new Promise<never>((_, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), {
+      once: true,
+    });
+  });
+  try {
+    return await Promise.race([connect, aborted]);
+  } catch (err) {
+    // Deno.connect cannot be cancelled. Close a socket that completes after the
+    // abort so it cannot linger as an unreferenced connection.
+    connect.then((conn) => conn.close()).catch(() => {});
+    throw err;
+  }
+}
+
+async function proxyPinnedConnection(
+  client: Deno.Conn,
+  url: URL,
+  address: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  let upstream: Deno.Conn | null = null;
+  try {
+    const initial = await readHeader(client);
+    const decoded = decoder.decode(initial);
+    const headerEnd = decoded.indexOf("\r\n\r\n") + 4;
+    const text = decoded.slice(0, headerEnd);
+    const firstLineEnd = text.indexOf("\r\n");
+    const firstLine = text.slice(0, firstLineEnd);
+    const port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
+    upstream = await connectWithSignal({ hostname: address, port }, signal);
+
+    if (firstLine.startsWith("CONNECT ")) {
+      const authority = firstLine.split(" ")[1];
+      const expectedAuthority = `${url.hostname}:${port}`;
+      if (authority !== expectedAuthority) {
+        throw new Error("Mirror proxy target mismatch");
+      }
+      await writeAll(
+        client,
+        encoder.encode("HTTP/1.1 200 Connection Established\r\n\r\n"),
+      );
+      const extra = initial.subarray(headerEnd);
+      if (extra.byteLength > 0) await writeAll(upstream, extra);
+    } else {
+      const match = firstLine.match(/^(\S+)\s+(\S+)\s+(HTTP\/\d\.\d)$/);
+      if (!match) throw new Error("Invalid mirror proxy request");
+      const requestUrl = new URL(match[2]);
+      if (
+        requestUrl.hostname !== url.hostname || requestUrl.port !== url.port
+      ) {
+        throw new Error("Mirror proxy target mismatch");
+      }
+      const target = `${requestUrl.pathname}${requestUrl.search}` || "/";
+      const rewritten = `${match[1]} ${target} ${match[3]}${
+        text.slice(firstLineEnd)
+      }`;
+      await writeAll(upstream, encoder.encode(rewritten));
+      const extra = initial.subarray(headerEnd);
+      if (extra.byteLength > 0) await writeAll(upstream, extra);
+    }
+
+    await Promise.allSettled([
+      client.readable.pipeTo(upstream.writable),
+      upstream.readable.pipeTo(client.writable),
+    ]);
+  } finally {
+    try {
+      upstream?.close();
+    } catch { /* already closed */ }
+    try {
+      client.close();
+    } catch { /* already closed */ }
+  }
+}
+
+/**
+ * Fetch through a one-shot loopback proxy whose upstream socket is pinned to
+ * the validated DNS answer. HTTPS remains end-to-end, so fetch still verifies
+ * the original hostname and supplies its SNI and Host header.
+ */
+export async function fetchPinnedMirrorUrl(
+  url: URL,
+  signal?: AbortSignal,
+): Promise<Response> {
+  const address = await resolvePublicMirrorAddress(url);
+  const proxyAbort = new AbortController();
+  const abortProxy = () => proxyAbort.abort(signal?.reason);
+  signal?.addEventListener("abort", abortProxy, { once: true });
+  const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
+  const proxyPort = (listener.addr as Deno.NetAddr).port;
+  const proxyTask = (async () => {
+    const client = await listener.accept();
+    listener.close();
+    await proxyPinnedConnection(client, url, address, proxyAbort.signal);
+  })().catch(() => {
+    try {
+      listener.close();
+    } catch { /* already closed */ }
+  });
+  const httpClient = Deno.createHttpClient({
+    proxy: { url: `http://127.0.0.1:${proxyPort}` },
+  });
+
+  try {
+    const init = {
+      redirect: "manual",
+      signal,
+      client: httpClient,
+    } as RequestInit & { client: Deno.HttpClient };
+    const response = await fetch(url, init);
+    if (!response.body) {
+      signal?.removeEventListener("abort", abortProxy);
+      proxyAbort.abort();
+      httpClient.close();
+      await proxyTask;
+      return response;
+    }
+
+    const reader = response.body.getReader();
+    const cleanup = async () => {
+      signal?.removeEventListener("abort", abortProxy);
+      proxyAbort.abort();
+      httpClient.close();
+      await proxyTask;
+    };
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const { done, value } = await reader.read();
+          if (done) {
+            controller.close();
+            await cleanup();
+          } else {
+            controller.enqueue(value);
+          }
+        } catch (err) {
+          controller.error(err);
+          await cleanup();
+        }
+      },
+      async cancel(reason) {
+        await reader.cancel(reason).catch(() => {});
+        await cleanup();
+      },
+    });
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  } catch (err) {
+    signal?.removeEventListener("abort", abortProxy);
+    proxyAbort.abort(err);
+    httpClient.close();
+    try {
+      listener.close();
+    } catch { /* already closed */ }
+    await proxyTask;
+    throw err;
   }
 }

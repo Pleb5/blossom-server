@@ -35,7 +35,7 @@ import { HTTPException } from "@hono/hono/http-exception";
 import type { Client } from "@libsql/client";
 import { ulid } from "@std/ulid";
 import { getBlob, hasBlob, insertBlob, isOwner } from "../db/blobs.ts";
-import { requireAuth } from "../middleware/auth.ts";
+import { optionalAuth, requireAuth } from "../middleware/auth.ts";
 import type { BlossomVariables } from "../middleware/auth.ts";
 import { debug } from "../middleware/debug.ts";
 import { errorResponse } from "../middleware/errors.ts";
@@ -51,7 +51,10 @@ import {
   requiresCommunityWhitelist,
 } from "../access/guard.ts";
 import { extractDimensions } from "../optimize/dimensions.ts";
-import { assertPublicMirrorUrl } from "../utils/mirror-url.ts";
+import {
+  assertPublicMirrorUrl,
+  fetchPinnedMirrorUrl,
+} from "../utils/mirror-url.ts";
 
 /** BUD-02 Blob Descriptor (same shape as upload route) */
 interface BlobDescriptor {
@@ -81,10 +84,7 @@ async function fetchMirrorUrl(
       : null;
     let response: Response;
     try {
-      response = await fetch(url, {
-        redirect: "manual",
-        signal: controller.signal,
-      });
+      response = await fetchPinnedMirrorUrl(url, controller.signal);
     } finally {
       if (timer !== null) clearTimeout(timer);
     }
@@ -135,7 +135,7 @@ export function buildMirrorRouter(
       }
     } else {
       // Auth is optional — capture it if present for owner registration
-      auth = ctx.get("auth");
+      auth = optionalAuth(ctx, "upload");
     }
 
     const accessError = await requireCommunityWhitelist(

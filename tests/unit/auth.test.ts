@@ -16,6 +16,7 @@ import {
 import type { NostrEvent } from "nostr-tools";
 import {
   extractHostname,
+  optionalAuth,
   parseAuthEvent,
   requireAuth,
   requireXTag,
@@ -278,6 +279,19 @@ Deno.test("requireAuth: returns event when auth and type match", () => {
   const ctx = makeCtx(event, "upload");
   const result = requireAuth(ctx, "upload");
   assertEquals(result.id, event.id);
+});
+
+Deno.test("optionalAuth enforces the verb only for a valid present token", () => {
+  assertEquals(
+    optionalAuth(makeCtx(undefined, undefined), "upload"),
+    undefined,
+  );
+  const event = makeEvent({});
+  assertThrows(
+    () => optionalAuth(makeCtx(event, "delete"), "upload"),
+    HTTPException,
+  );
+  assertEquals(optionalAuth(makeCtx(event, "upload"), "upload")?.id, event.id);
 });
 
 // ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@ import { assertEquals, assertRejects } from "@std/assert";
 import {
   assertPublicMirrorUrl,
   isPublicIpAddress,
+  resolvePublicMirrorAddress,
 } from "../../src/utils/mirror-url.ts";
 
 Deno.test("isPublicIpAddress rejects private and special addresses", () => {
@@ -54,5 +55,34 @@ Deno.test("assertPublicMirrorUrl accepts hostnames with only public results", as
           ? ["93.184.216.34"]
           : ["2606:2800:220:1::248:1893:25c8:1946"],
       ),
+  );
+});
+
+Deno.test("resolvePublicMirrorAddress returns a validated DNS answer without re-resolving", async () => {
+  let calls = 0;
+  const address = await resolvePublicMirrorAddress(
+    new URL("https://example.com/file"),
+    (_hostname, type) => {
+      calls++;
+      return Promise.resolve(type === "A" ? ["93.184.216.34"] : []);
+    },
+  );
+  assertEquals(address, "93.184.216.34");
+  // Both families are validated once; there is no second, rebindable lookup.
+  assertEquals(calls, 2);
+});
+
+Deno.test("resolvePublicMirrorAddress rejects mixed public/private DNS answers", async () => {
+  await assertRejects(
+    () =>
+      resolvePublicMirrorAddress(
+        new URL("https://example.com/file"),
+        (_hostname, type) =>
+          Promise.resolve(
+            type === "A" ? ["93.184.216.34"] : ["::1"],
+          ),
+      ),
+    Error,
+    "non-public",
   );
 });

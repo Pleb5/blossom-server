@@ -84,49 +84,54 @@ export async function optimizeVideo(
     dir: tmpDir,
     suffix: `.${opts.format}`,
   });
-  const crf = Math.round(51 - (opts.quality / 100) * 51);
-  const extraArgs = FORMAT_EXTRA_ARGS[opts.format] ?? [];
+  try {
+    const crf = Math.round(51 - (opts.quality / 100) * 51);
+    const extraArgs = FORMAT_EXTRA_ARGS[opts.format] ?? [];
 
-  // Probe original FPS; clamp to min(originalFps, maxFps)
-  const originalFps = await probeFps(inputPath);
-  const targetFps = originalFps !== null
-    ? Math.min(originalFps, opts.maxFps)
-    : opts.maxFps;
+    // Probe original FPS; clamp to min(originalFps, maxFps)
+    const originalFps = await probeFps(inputPath);
+    const targetFps = originalFps !== null
+      ? Math.min(originalFps, opts.maxFps)
+      : opts.maxFps;
 
-  const args = [
-    "-i",
-    inputPath,
-    "-vcodec",
-    opts.videoCodec,
-    "-acodec",
-    opts.audioCodec,
-    // fit-inside: scale to maxHeight, preserve aspect ratio
-    "-vf",
-    `scale=trunc(oh*a/2)*2:${opts.maxHeight}`,
-    "-crf",
-    String(crf),
-    "-r",
-    String(targetFps),
-    ...extraArgs,
-    "-y", // overwrite output without prompting (temp file already exists)
-    outputPath,
-  ];
+    const args = [
+      "-i",
+      inputPath,
+      "-vcodec",
+      opts.videoCodec,
+      "-acodec",
+      opts.audioCodec,
+      // fit-inside: scale to maxHeight, preserve aspect ratio
+      "-vf",
+      `scale=trunc(oh*a/2)*2:${opts.maxHeight}`,
+      "-crf",
+      String(crf),
+      "-r",
+      String(targetFps),
+      ...extraArgs,
+      "-y", // overwrite output without prompting (temp file already exists)
+      outputPath,
+    ];
 
-  const cmd = new Deno.Command("ffmpeg", {
-    args,
-    stdout: "null",
-    stderr: "piped",
-  });
+    const cmd = new Deno.Command("ffmpeg", {
+      args,
+      stdout: "null",
+      stderr: "piped",
+    });
 
-  const { success, stderr } = await cmd.output();
+    const { success, stderr } = await cmd.output();
 
-  if (!success) {
-    const stderrText = new TextDecoder().decode(stderr);
-    if (stderrText.length > 0) {
-      debug("[ffmpeg stderr]\n" + stderrText);
+    if (!success) {
+      const stderrText = new TextDecoder().decode(stderr);
+      if (stderrText.length > 0) {
+        debug("[ffmpeg stderr]\n" + stderrText);
+      }
+      throw new Error(`ffmpeg exited with non-zero status`);
     }
-    throw new Error(`ffmpeg exited with non-zero status`);
-  }
 
-  return outputPath;
+    return outputPath;
+  } catch (err) {
+    await Deno.remove(outputPath).catch(() => {});
+    throw err;
+  }
 }

@@ -1,7 +1,7 @@
 import { Hono } from "@hono/hono";
 import { HTTPException } from "@hono/hono/http-exception";
 import type { Client } from "@libsql/client";
-import { crypto as stdCrypto } from "@std/crypto";
+import { sha256 } from "@noble/hashes/sha256";
 import { encodeHex } from "@std/encoding/hex";
 import { extension as extFromMime, typeByExtension } from "@std/media-types";
 import { ulid } from "@std/ulid";
@@ -16,7 +16,7 @@ import {
   insertMediaThumbnail,
   isOwner,
 } from "../db/blobs.ts";
-import { requireAuth, requireXTag } from "../middleware/auth.ts";
+import { optionalAuth, requireAuth, requireXTag } from "../middleware/auth.ts";
 import type { BlossomVariables } from "../middleware/auth.ts";
 import { debug } from "../middleware/debug.ts";
 import { errorResponse } from "../middleware/errors.ts";
@@ -29,6 +29,7 @@ import { type Nip94Tag, nip94Tags, optionalNip94Tags } from "../utils/nip94.ts";
 import { getBaseUrl, getBlobUrl } from "../utils/url.ts";
 import { getPool, WorkerJobError } from "../workers/pool.ts";
 import type { Config } from "../config/schema.ts";
+import { withBodyDeadline } from "../utils/streams.ts";
 import {
   requireCommunityWhitelist,
   requiresCommunityWhitelist,
@@ -49,34 +50,24 @@ function mimeToExt(mime: string | null): string {
   return extFromMime(mime) ?? "";
 }
 
-async function* streamChunks(
-  stream: ReadableStream<Uint8Array>,
-): AsyncIterable<Uint8Array<ArrayBuffer>> {
-  for await (const chunk of stream) {
-    yield new Uint8Array(chunk);
-  }
-}
-
 async function hashFile(
   filePath: string,
 ): Promise<{ hash: string; size: number }> {
   const file = await Deno.open(filePath, { read: true });
-  const [s1, s2] = file.readable.tee();
-
+  const digest = sha256.create();
   let size = 0;
-  const countingTransform = new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
+  try {
+    for await (const chunk of file.readable) {
       size += chunk.byteLength;
-      controller.enqueue(chunk);
-    },
-  });
+      digest.update(chunk);
+    }
+  } finally {
+    try {
+      file.close();
+    } catch { /* stream already closed it */ }
+  }
 
-  const [hashBuf] = await Promise.all([
-    stdCrypto.subtle.digest("SHA-256", streamChunks(s1)),
-    s2.pipeThrough(countingTransform).pipeTo(new WritableStream()),
-  ]);
-
-  return { hash: encodeHex(new Uint8Array(hashBuf)), size };
+  return { hash: encodeHex(digest.digest()), size };
 }
 
 function detectOptimizedMime(filePath: string): string {
@@ -243,7 +234,7 @@ export function buildMediaRouter(
         throw err;
       }
     } else {
-      auth = ctx.get("auth");
+      auth = optionalAuth(ctx, "media");
     }
 
     const accessError = await requireCommunityWhitelist(
@@ -334,6 +325,7 @@ export function buildMediaRouter(
     // Track temp paths for cleanup on error
     let tmpPath: string | null = null;
     let optimizedTmpPath: string | null = null;
+    let preparedThumbnail: PreparedThumbnail | null = null;
 
     try {
       if (!config.media.enabled) {
@@ -360,7 +352,7 @@ export function buildMediaRouter(
           throw err;
         }
       } else {
-        auth = ctx.get("auth");
+        auth = optionalAuth(ctx, "media");
       }
 
       const accessError = await requireCommunityWhitelist(
@@ -475,14 +467,20 @@ export function buildMediaRouter(
         `dispatching to worker — size=${contentLength} mime=${mimeType}`,
       );
 
-      const jobPromise = pool.dispatch(
+      const deadline = withBodyDeadline(
         body,
+        config.media.bodyTimeout,
+        `Media body transfer exceeded ${config.media.bodyTimeout}ms`,
+      );
+      const jobPromise = pool.dispatch(
+        deadline.stream,
         tmpPath,
         contentLength,
         xSha256,
         config.media.maxSize,
       );
       if (!jobPromise) {
+        deadline.cancel();
         await body.cancel().catch(() => {});
         await storage.abortWrite(session).catch(() => {});
         tmpPath = null;
@@ -501,12 +499,13 @@ export function buildMediaRouter(
       let _originalSize: number;
       try {
         ({ hash: originalHash, size: _originalSize } = await jobPromise);
+        deadline.clear();
         debug(
           debugPrefix,
           `worker complete — originalHash=${originalHash.slice(0, 8)}`,
         );
       } catch (err) {
-        tmpPath = null; // worker already cleaned up
+        deadline.cancel(err);
         const msg = err instanceof Error ? err.message : "Upload failed";
         debug(debugPrefix, `worker error — ${msg}`);
         if (
@@ -549,8 +548,6 @@ export function buildMediaRouter(
 
       const existingOptimizedHash = await getMediaDerivative(db, originalHash);
       if (existingOptimizedHash) {
-        await Deno.remove(tmpPath).catch(() => {});
-        tmpPath = null;
         debug(
           debugPrefix,
           `dedup hit (derivative) — optimizedHash=${
@@ -559,6 +556,8 @@ export function buildMediaRouter(
         );
         const existing = await getBlob(db, existingOptimizedHash);
         if (existing) {
+          await Deno.remove(tmpPath).catch(() => {});
+          tmpPath = null;
           if (
             auth && !(await isOwner(db, existingOptimizedHash, auth.pubkey))
           ) {
@@ -707,7 +706,6 @@ export function buildMediaRouter(
       const dim = await extractDimensions(optPath, optimizedType);
       debug(debugPrefix, `dim=${dim ?? "none"}`);
 
-      let preparedThumbnail: PreparedThumbnail | null = null;
       try {
         preparedThumbnail = await prepareThumbnail(
           optPath,
@@ -790,11 +788,14 @@ export function buildMediaRouter(
         201,
       );
     } catch (err) {
-      // Global catch: clean up any remaining temp files
-      if (tmpPath) await Deno.remove(tmpPath).catch(() => {});
-      if (optimizedTmpPath) await Deno.remove(optimizedTmpPath).catch(() => {});
       const msg = err instanceof Error ? err.message : "Internal server error";
       return errorResponse(ctx, 500, msg);
+    } finally {
+      if (tmpPath) await Deno.remove(tmpPath).catch(() => {});
+      if (optimizedTmpPath) await Deno.remove(optimizedTmpPath).catch(() => {});
+      if (preparedThumbnail) {
+        await Deno.remove(preparedThumbnail.path).catch(() => {});
+      }
     }
   });
 

@@ -65,6 +65,10 @@ interface WorkerState {
   jobCount: number;
   /** Bytes/sec reported by the most recent throughput heartbeat from this worker. */
   throughputBps: number;
+  /** IDs of jobs assigned to this worker. */
+  jobs: Set<string>;
+  /** Main-thread side of the local DB bridge, when applicable. */
+  dbPort?: MessagePort;
 }
 
 interface ThroughputMessage {
@@ -95,6 +99,10 @@ export class UploadWorkerPool {
   private pending = new Map<string, PendingJob>();
   private jobCounter = 0;
   private readonly maxJobsPerWorker: number;
+  private readonly throughputWindowMs: number;
+  private readonly db: Client;
+  private readonly dbConfig: DbConfig;
+  private shuttingDown = false;
 
   constructor(
     size: number,
@@ -104,71 +112,94 @@ export class UploadWorkerPool {
     dbConfig: DbConfig,
   ) {
     this.maxJobsPerWorker = maxJobsPerWorker;
-    const remote = dbConfig.url !== undefined;
+    this.throughputWindowMs = throughputWindowMs;
+    this.db = db;
+    this.dbConfig = dbConfig;
 
     for (let i = 0; i < size; i++) {
-      const worker = new Worker(
-        new URL("./upload-worker.ts", import.meta.url),
-        { type: "module" },
-      );
+      this.workers.push(this.createWorker(i));
+    }
+  }
 
-      const state: WorkerState = { worker, jobCount: 0, throughputBps: 0 };
+  private createWorker(index: number): WorkerState {
+    const worker = new Worker(
+      new URL("./upload-worker.ts", import.meta.url),
+      { type: "module" },
+    );
+    const state: WorkerState = {
+      worker,
+      jobCount: 0,
+      throughputBps: 0,
+      jobs: new Set(),
+    };
 
-      if (remote) {
-        // Remote mode: worker creates its own Client from config.
-        // No MessageChannel — each isolate talks directly to the DB server.
-        worker.postMessage({
+    if (this.dbConfig.url !== undefined) {
+      worker.postMessage({
+        type: "init",
+        dbMode: "remote",
+        dbUrl: this.dbConfig.url,
+        dbAuthToken: this.dbConfig.authToken,
+        throughputWindowMs: this.throughputWindowMs,
+      });
+    } else {
+      const { port1, port2 } = new MessageChannel();
+      state.dbPort = port1;
+      installDbBridge(this.db, port1);
+      worker.postMessage(
+        {
           type: "init",
-          dbMode: "remote",
-          dbUrl: dbConfig.url,
-          dbAuthToken: dbConfig.authToken,
-          throughputWindowMs,
-        });
-      } else {
-        // Local SQLite mode: worker gets a MessageChannel port.
-        // Main thread executes all DB ops via the bridge.
-        const { port1, port2 } = new MessageChannel();
-        installDbBridge(db, port1);
-        worker.postMessage(
-          { type: "init", dbMode: "local", dbPort: port2, throughputWindowMs },
-          [port2],
-        );
+          dbMode: "local",
+          dbPort: port2,
+          throughputWindowMs: this.throughputWindowMs,
+        },
+        [port2],
+      );
+    }
+
+    worker.onmessage = (event: MessageEvent<WorkerMessage>) => {
+      const msg = event.data;
+
+      // Throughput heartbeat — update routing state, no job to settle.
+      if (isThroughput(msg)) {
+        state.throughputBps = msg.bytesPerSec;
+        return;
       }
 
-      // Route messages from this worker back to waiting Promises or update state.
-      worker.onmessage = (event: MessageEvent<WorkerMessage>) => {
-        const msg = event.data;
+      // Job completion (success or error).
+      const { id, hash, size, error } = msg;
+      const pending = this.pending.get(id);
+      if (!pending) return; // stale — ignore
 
-        // Throughput heartbeat — update routing state, no job to settle.
-        if (isThroughput(msg)) {
-          state.throughputBps = msg.bytesPerSec;
-          return;
-        }
+      this.pending.delete(id);
+      state.jobs.delete(id);
+      state.jobCount--;
 
-        // Job completion (success or error).
-        const { id, hash, size, error } = msg;
+      if (error !== undefined) {
+        pending.reject(new WorkerJobError(error, msg.errorType ?? "UNKNOWN"));
+      } else {
+        pending.resolve({ hash: hash!, size: size! });
+      }
+    };
+
+    worker.onerror = (event) => {
+      event.preventDefault();
+      if (this.shuttingDown || this.workers[index] !== state) return;
+      console.error(`Upload worker ${index} crashed:`, event.message);
+      for (const id of state.jobs) {
         const pending = this.pending.get(id);
-        if (!pending) return; // stale — ignore
-
+        if (!pending) continue;
         this.pending.delete(id);
-        state.jobCount--;
+        pending.reject(
+          new WorkerJobError("Upload worker crashed", "WORKER_CRASH"),
+        );
+      }
+      state.jobs.clear();
+      state.worker.terminate();
+      state.dbPort?.close();
+      this.workers[index] = this.createWorker(index);
+    };
 
-        if (error !== undefined) {
-          pending.reject(new WorkerJobError(error, msg.errorType ?? "UNKNOWN"));
-        } else {
-          pending.resolve({ hash: hash!, size: size! });
-        }
-      };
-
-      worker.onerror = (event) => {
-        console.error(`Upload worker ${i} error:`, event.message);
-        // Decrement jobCount on uncaught worker error so the slot isn't leaked.
-        // We don't know which job failed, so we clamp to 0 as a safe fallback.
-        if (state.jobCount > 0) state.jobCount--;
-      };
-
-      this.workers.push(state);
-    }
+    return state;
   }
 
   /** Total number of workers in the pool. */
@@ -220,24 +251,41 @@ export class UploadWorkerPool {
 
     candidate.jobCount++;
     const id = String(++this.jobCounter);
+    candidate.jobs.add(id);
 
     const promise = new Promise<UploadJobResult>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
     });
 
     // Transfer the stream to the worker — zero-copy, no tee on the main thread.
-    candidate.worker.postMessage(
-      { type: "job", id, stream, tmpPath, sizeHint, xSha256, maxBytes },
-      transferStream(stream),
-    );
+    try {
+      candidate.worker.postMessage(
+        { type: "job", id, stream, tmpPath, sizeHint, xSha256, maxBytes },
+        transferStream(stream),
+      );
+    } catch (err) {
+      candidate.jobs.delete(id);
+      candidate.jobCount--;
+      this.pending.delete(id);
+      return Promise.reject(
+        err instanceof Error ? err : new Error(String(err)),
+      );
+    }
 
     return promise;
   }
 
   /** Gracefully terminate all workers. */
   shutdown(): void {
-    for (const { worker } of this.workers) {
+    this.shuttingDown = true;
+    for (const pending of this.pending.values()) {
+      pending.reject(
+        new WorkerJobError("Upload worker pool shut down", "WORKER_CRASH"),
+      );
+    }
+    for (const { worker, dbPort } of this.workers) {
       worker.terminate();
+      dbPort?.close();
     }
     this.workers = [];
     this.pending.clear();

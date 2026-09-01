@@ -23,6 +23,7 @@ import { buildApp } from "../../src/server.ts";
 import { ConfigSchema } from "../../src/config/schema.ts";
 import type { Hono } from "@hono/hono";
 import type { BlossomVariables } from "../../src/middleware/auth.ts";
+import type { IBlobStorage } from "../../src/storage/interface.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -92,6 +93,7 @@ const BLOB_DATA = new Uint8Array([
 const BLOB_SIZE = BLOB_DATA.byteLength; // 20
 
 let app: Hono<{ Variables: BlossomVariables }>;
+let redirectApp: Hono<{ Variables: BlossomVariables }>;
 let blobHash: string;
 let blobUrl: string;
 let cleanup: () => Promise<void>;
@@ -121,6 +123,17 @@ Deno.test({
     });
 
     app = await buildApp(db, storage, config);
+    const redirectStorage = new Proxy(storage, {
+      get(target, property, receiver) {
+        if (property === "publicUrl") {
+          return (hash: string, ext: string) =>
+            `https://cdn.example/${hash}${ext ? `.${ext}` : ""}`;
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as IBlobStorage;
+    redirectApp = await buildApp(db, redirectStorage, config);
 
     // Upload the test blob
     blobHash = await sha256Hex(BLOB_DATA);
@@ -165,6 +178,47 @@ Deno.test({
 
     const body = new Uint8Array(await res.arrayBuffer());
     assertEquals(body, BLOB_DATA);
+  },
+  ...testOpts,
+});
+
+Deno.test({
+  name: "GET blob: public storage redirects with immutable cache policy",
+  async fn() {
+    const res = await redirectApp.fetch(
+      new Request(`http://localhost${blobUrl}`, { redirect: "manual" }),
+    );
+    assertEquals(res.status, 307);
+    assertEquals(
+      res.headers.get("location"),
+      `https://cdn.example/${blobHash}`,
+    );
+    assertEquals(
+      res.headers.get("cache-control"),
+      "public, max-age=31536000, immutable",
+    );
+  },
+  ...testOpts,
+});
+
+Deno.test({
+  name: "GET blob: public storage validates Range before redirecting",
+  async fn() {
+    const valid = await redirectApp.fetch(
+      new Request(`http://localhost${blobUrl}`, {
+        headers: { Range: "bytes=0-3" },
+        redirect: "manual",
+      }),
+    );
+    assertEquals(valid.status, 307);
+
+    const invalid = await redirectApp.fetch(
+      new Request(`http://localhost${blobUrl}`, {
+        headers: { Range: "bytes=999-1000" },
+        redirect: "manual",
+      }),
+    );
+    assertEquals(invalid.status, 416);
   },
   ...testOpts,
 });

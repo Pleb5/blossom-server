@@ -111,6 +111,9 @@ const UploadSchema = z.object({
     .describe(
       "Maximum blob size in bytes. Enforced from the Content-Length header before any body bytes are read. Requests without Content-Length receive 411. Default: 2 GB.",
     ),
+  bodyTimeout: z.number().int().min(0).default(300_000).describe(
+    "Maximum time in milliseconds for the complete PUT /upload request body transfer. 0 disables the deadline. Default: 300 000 ms.",
+  ),
   workers: z
     .number()
     .int()
@@ -352,6 +355,9 @@ const MediaSchema = z.object({
     .describe(
       "Maximum input file size in bytes before reading the body. Default: 1 GB.",
     ),
+  bodyTimeout: z.number().int().min(0).default(300_000).describe(
+    "Maximum time in milliseconds for the complete PUT /media request body transfer. 0 disables the deadline. Default: 300 000 ms.",
+  ),
   tmpDir: z
     .string()
     .default("./data/media-tmp")
@@ -629,7 +635,7 @@ export const ConfigSchema = z
       .describe(
         'The bare domain name this server is publicly reachable at, e.g. "cdn.example.com". ' +
           "Used to build blob descriptor URLs and to validate the BUD-11 'server' tag in auth events. " +
-          "Defaults to the Host header of the incoming request. Useful behind a reverse proxy. " +
+          "When omitted, blob URLs use the incoming Host header, but server-scoped BUD-11 tokens are rejected. " +
           "Do NOT include a protocol scheme (https://) — bare hostname only.",
       ),
     // Deprecated: use the "database" section instead.
