@@ -233,6 +233,34 @@ Deno.test({
 });
 
 Deno.test({
+  name: "PUT /upload: optional auth verb failure cancels the request body",
+  async fn() {
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull() {
+        return new Promise(() => {});
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const res = await fetchNoAuth("/upload", {
+      method: "PUT",
+      headers: {
+        "Content-Length": "1",
+        Authorization: encodeAuth(makeUploadAuth({ tTag: "delete" })),
+      },
+      body: stream,
+    });
+
+    assertEquals(res.status, 403);
+    assertEquals(cancelled, true);
+    await res.body?.cancel();
+  },
+  ...testOpts,
+});
+
+Deno.test({
   name: "PUT /upload: disallowed MIME type returns 415",
   async fn() {
     // Build a one-off app that only accepts images via storage rules

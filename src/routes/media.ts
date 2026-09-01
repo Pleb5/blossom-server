@@ -99,6 +99,23 @@ interface PreparedThumbnail {
   dim: string | null;
 }
 
+export async function commitMediaFile(
+  storage: IBlobStorage,
+  path: string,
+  hash: string,
+  ext: string,
+  saveMetadata: () => Promise<void>,
+): Promise<void> {
+  const existed = await storage.has(hash, ext);
+  await storage.commitFile(path, hash, ext);
+  try {
+    await saveMetadata();
+  } catch (err) {
+    if (!existed) await storage.remove(hash, ext).catch(() => false);
+    throw err;
+  }
+}
+
 async function prepareThumbnail(
   inputPath: string,
   inputType: string | null,
@@ -141,19 +158,26 @@ async function storePreparedThumbnail(
     baseUrl: string;
   },
 ): Promise<Nip94Tag> {
-  await opts.storage.commitFile(
+  await commitMediaFile(
+    opts.storage,
     opts.thumbnail.path,
     opts.thumbnail.sha256,
     opts.thumbnail.ext,
+    async () => {
+      await insertBlobRecord(opts.db, {
+        sha256: opts.thumbnail.sha256,
+        size: opts.thumbnail.size,
+        type: opts.thumbnail.type,
+        uploaded: opts.now,
+        nip94: optionalNip94Tags({ dim: opts.thumbnail.dim }),
+      });
+      await insertMediaThumbnail(
+        opts.db,
+        opts.parentSha256,
+        opts.thumbnail.sha256,
+      );
+    },
   );
-  await insertBlobRecord(opts.db, {
-    sha256: opts.thumbnail.sha256,
-    size: opts.thumbnail.size,
-    type: opts.thumbnail.type,
-    uploaded: opts.now,
-    nip94: optionalNip94Tags({ dim: opts.thumbnail.dim }),
-  });
-  await insertMediaThumbnail(opts.db, opts.parentSha256, opts.thumbnail.sha256);
 
   return [
     "thumb",
@@ -329,6 +353,7 @@ export function buildMediaRouter(
 
     try {
       if (!config.media.enabled) {
+        await ctx.req.raw.body?.cancel();
         debug(debugPrefix, "rejected: media endpoint disabled");
         return errorResponse(
           ctx,
@@ -338,21 +363,23 @@ export function buildMediaRouter(
       }
 
       let auth: ReturnType<typeof requireAuth> | undefined;
-      if (
-        config.media.requireAuth || requiresCommunityWhitelist(config, "write")
-      ) {
-        try {
+      try {
+        if (
+          config.media.requireAuth ||
+          requiresCommunityWhitelist(config, "write")
+        ) {
           auth = requireAuth(ctx, "media");
-        } catch (err) {
-          const msg = err instanceof HTTPException ? err.message : String(err);
-          debug(debugPrefix, `rejected: auth failed — ${msg}`);
-          if (err instanceof HTTPException) {
-            return errorResponse(ctx, err.status as 401 | 403, err.message);
-          }
-          throw err;
+        } else {
+          auth = optionalAuth(ctx, "media");
         }
-      } else {
-        auth = optionalAuth(ctx, "media");
+      } catch (err) {
+        await ctx.req.raw.body?.cancel();
+        const msg = err instanceof HTTPException ? err.message : String(err);
+        debug(debugPrefix, `rejected: auth failed — ${msg}`);
+        if (err instanceof HTTPException) {
+          return errorResponse(ctx, err.status as 401 | 403, err.message);
+        }
+        throw err;
       }
 
       const accessError = await requireCommunityWhitelist(
@@ -460,7 +487,13 @@ export function buildMediaRouter(
         );
       }
 
-      const session = await storage.beginWrite(contentLength);
+      let session;
+      try {
+        session = await storage.beginWrite(contentLength);
+      } catch (err) {
+        await body.cancel().catch(() => {});
+        throw err;
+      }
       tmpPath = session.tmpPath;
       debug(
         debugPrefix,
@@ -470,7 +503,7 @@ export function buildMediaRouter(
       const deadline = withBodyDeadline(
         body,
         config.media.bodyTimeout,
-        `Media body transfer exceeded ${config.media.bodyTimeout}ms`,
+        `Media body made no progress for ${config.media.bodyTimeout}ms`,
       );
       const jobPromise = pool.dispatch(
         deadline.stream,
@@ -718,7 +751,74 @@ export function buildMediaRouter(
       }
 
       try {
-        await storage.commitFile(optPath, optimizedHash, optimizedExt);
+        const now = Math.floor(Date.now() / 1000);
+        const blobRecord = {
+          sha256: optimizedHash,
+          size: optimizedSize,
+          type: optimizedType,
+          uploaded: now,
+          nip94: optionalNip94Tags({ dim, originalSha256: originalHash }),
+        };
+        await commitMediaFile(
+          storage,
+          optPath,
+          optimizedHash,
+          optimizedExt,
+          async () => {
+            await insertBlob(db, blobRecord, auth?.pubkey ?? "anonymous");
+            await insertMediaDerivative(db, originalHash, optimizedHash);
+          },
+        );
+        optimizedTmpPath = null;
+
+        const baseUrl = getBaseUrl(ctx.req.raw, config.publicDomain);
+        let thumbnailTag: Nip94Tag | null = null;
+        if (preparedThumbnail) {
+          const thumbnailToStore = preparedThumbnail;
+          try {
+            thumbnailTag = await storePreparedThumbnail({
+              db,
+              storage,
+              thumbnail: thumbnailToStore,
+              parentSha256: optimizedHash,
+              now,
+              baseUrl,
+            });
+            preparedThumbnail = null;
+          } catch (err) {
+            await Deno.remove(thumbnailToStore.path).catch(() => {});
+            preparedThumbnail = null;
+            const msg = err instanceof Error ? err.message : String(err);
+            debug(debugPrefix, `thumbnail skipped — ${msg}`);
+          }
+        }
+
+        debug(
+          debugPrefix,
+          `media upload complete — ${optimizedHash} (${optimizedSize} bytes, ${optimizedMime})`,
+        );
+        const url = getBlobUrl(optimizedHash, blobRecord.type, baseUrl);
+        const type = blobRecord.type ?? "application/octet-stream";
+        return ctx.json(
+          {
+            url,
+            sha256: optimizedHash,
+            size: optimizedSize,
+            type,
+            uploaded: now,
+            nip94: nip94Tags({
+              url,
+              sha256: optimizedHash,
+              size: optimizedSize,
+              type,
+              tags: [
+                ...(blobRecord.nip94 ?? []),
+                ...(thumbnailTag ? [thumbnailTag] : []),
+              ],
+            }),
+          } satisfies BlobDescriptor,
+          201,
+        );
       } catch (err) {
         await Deno.remove(optPath).catch(() => {});
         if (preparedThumbnail) {
@@ -726,75 +826,15 @@ export function buildMediaRouter(
         }
         throw err;
       }
-      optimizedTmpPath = null;
-
-      const now = Math.floor(Date.now() / 1000);
-      const blobRecord = {
-        sha256: optimizedHash,
-        size: optimizedSize,
-        type: optimizedType,
-        uploaded: now,
-        nip94: optionalNip94Tags({ dim, originalSha256: originalHash }),
-      };
-      await insertBlob(db, blobRecord, auth?.pubkey ?? "anonymous");
-      await insertMediaDerivative(db, originalHash, optimizedHash);
-
-      const baseUrl = getBaseUrl(ctx.req.raw, config.publicDomain);
-      let thumbnailTag: Nip94Tag | null = null;
-      if (preparedThumbnail) {
-        const thumbnailToStore = preparedThumbnail;
-        try {
-          thumbnailTag = await storePreparedThumbnail({
-            db,
-            storage,
-            thumbnail: thumbnailToStore,
-            parentSha256: optimizedHash,
-            now,
-            baseUrl,
-          });
-          preparedThumbnail = null;
-        } catch (err) {
-          await Deno.remove(thumbnailToStore.path).catch(() => {});
-          preparedThumbnail = null;
-          const msg = err instanceof Error ? err.message : String(err);
-          debug(debugPrefix, `thumbnail skipped — ${msg}`);
-        }
-      }
-
-      debug(
-        debugPrefix,
-        `media upload complete — ${optimizedHash} (${optimizedSize} bytes, ${optimizedMime})`,
-      );
-      const url = getBlobUrl(optimizedHash, blobRecord.type, baseUrl);
-      const type = blobRecord.type ?? "application/octet-stream";
-      return ctx.json(
-        {
-          url,
-          sha256: optimizedHash,
-          size: optimizedSize,
-          type,
-          uploaded: now,
-          nip94: nip94Tags({
-            url,
-            sha256: optimizedHash,
-            size: optimizedSize,
-            type,
-            tags: [
-              ...(blobRecord.nip94 ?? []),
-              ...(thumbnailTag ? [thumbnailTag] : []),
-            ],
-          }),
-        } satisfies BlobDescriptor,
-        201,
-      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Internal server error";
       return errorResponse(ctx, 500, msg);
     } finally {
       if (tmpPath) await Deno.remove(tmpPath).catch(() => {});
       if (optimizedTmpPath) await Deno.remove(optimizedTmpPath).catch(() => {});
-      if (preparedThumbnail) {
-        await Deno.remove(preparedThumbnail.path).catch(() => {});
+      const thumbnailToClean = preparedThumbnail as PreparedThumbnail | null;
+      if (thumbnailToClean) {
+        await Deno.remove(thumbnailToClean.path).catch(() => {});
       }
     }
   });

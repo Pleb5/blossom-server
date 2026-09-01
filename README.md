@@ -201,9 +201,9 @@ directory). Environment variables can be substituted anywhere in the file using
 | `upload.requirePubkeyInRule` | `false`          | Reject uploads unless the uploader's pubkey appears in a storage rule                                         |
 | `mirror.enabled`             | `true`           | Enable `PUT /mirror` (BUD-04)                                                                                 |
 | `mirror.connectTimeout`      | `30000`          | Timeout (ms) to connect to the origin; 0 = no limit                                                           |
-| `mirror.bodyTimeout`         | `300000`         | Timeout (ms) for full body transfer from origin; 0 = no limit                                                 |
-| `upload.bodyTimeout`         | `300000`         | Deadline (ms) for the complete direct upload body; 0 = no limit                                               |
-| `media.bodyTimeout`          | `300000`         | Deadline (ms) for the complete media upload body; 0 = no limit                                                |
+| `mirror.bodyTimeout`         | `300000`         | Maximum idle time (ms) between origin body chunks; resets on progress; 0 = no limit                           |
+| `upload.bodyTimeout`         | `300000`         | Maximum idle time (ms) between direct upload body chunks; resets on progress; 0 = no limit                    |
+| `media.bodyTimeout`          | `300000`         | Maximum idle time (ms) between media upload body chunks; resets on progress; 0 = no limit                     |
 | `delete.requireAuth`         | `true`           | Require Nostr auth for deletes                                                                                |
 | `list.enabled`               | `false`          | Enable `GET /list/:pubkey` (BUD-02); disabled by default                                                      |
 | `list.requireAuth`           | `false`          | Require Nostr auth for list requests                                                                          |

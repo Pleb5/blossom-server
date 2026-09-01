@@ -181,26 +181,28 @@ export function buildUploadRouter(
     const debugPrefix = `[upload:${reqId}]`;
 
     if (!config.upload.enabled) {
+      await ctx.req.raw.body?.cancel();
       debug(debugPrefix, "rejected: uploads disabled");
       return errorResponse(ctx, 403, "Uploads are disabled on this server");
     }
 
     let auth: ReturnType<typeof requireAuth> | undefined;
-    if (
-      config.upload.requireAuth || requiresCommunityWhitelist(config, "write")
-    ) {
-      try {
+    try {
+      if (
+        config.upload.requireAuth || requiresCommunityWhitelist(config, "write")
+      ) {
         auth = requireAuth(ctx, "upload");
-      } catch (err) {
-        const msg = err instanceof HTTPException ? err.message : String(err);
-        debug(debugPrefix, `rejected: auth failed — ${msg}`);
-        if (err instanceof HTTPException) {
-          return errorResponse(ctx, err.status as 401 | 403, err.message);
-        }
-        throw err;
+      } else {
+        auth = optionalAuth(ctx, "upload");
       }
-    } else {
-      auth = optionalAuth(ctx, "upload");
+    } catch (err) {
+      await ctx.req.raw.body?.cancel();
+      const msg = err instanceof HTTPException ? err.message : String(err);
+      debug(debugPrefix, `rejected: auth failed — ${msg}`);
+      if (err instanceof HTTPException) {
+        return errorResponse(ctx, err.status as 401 | 403, err.message);
+      }
+      throw err;
     }
 
     const accessError = await requireCommunityWhitelist(
@@ -366,7 +368,13 @@ export function buildUploadRouter(
       );
     }
 
-    const session = await storage.beginWrite(contentLength);
+    let session;
+    try {
+      session = await storage.beginWrite(contentLength);
+    } catch (err) {
+      await body.cancel().catch(() => {});
+      throw err;
+    }
 
     debug(
       debugPrefix,
@@ -378,7 +386,7 @@ export function buildUploadRouter(
     const deadline = withBodyDeadline(
       body,
       config.upload.bodyTimeout,
-      `Upload body transfer exceeded ${config.upload.bodyTimeout}ms`,
+      `Upload body made no progress for ${config.upload.bodyTimeout}ms`,
     );
     const jobPromise = pool.dispatch(
       deadline.stream,

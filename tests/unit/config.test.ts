@@ -15,7 +15,7 @@ Deno.test("ConfigSchema: media thumbnail defaults are enabled", () => {
   assertEquals(config.media.thumbnail.videoSeek, 1);
 });
 
-Deno.test("ConfigSchema: mirror body timeout is finite by default", () => {
+Deno.test("ConfigSchema: body idle timeouts are finite by default", () => {
   const config = ConfigSchema.parse({});
   assertEquals(config.mirror.bodyTimeout, 300_000);
   assertEquals(config.upload.bodyTimeout, 300_000);

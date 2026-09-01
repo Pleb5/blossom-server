@@ -112,7 +112,7 @@ const UploadSchema = z.object({
       "Maximum blob size in bytes. Enforced from the Content-Length header before any body bytes are read. Requests without Content-Length receive 411. Default: 2 GB.",
     ),
   bodyTimeout: z.number().int().min(0).default(300_000).describe(
-    "Maximum time in milliseconds for the complete PUT /upload request body transfer. 0 disables the deadline. Default: 300 000 ms.",
+    "Maximum idle time in milliseconds between chunks of a PUT /upload request body. The timer resets whenever bytes arrive, allowing large slow uploads while rejecting stalled clients. 0 disables the timeout. Default: 300 000 ms.",
   ),
   workers: z
     .number()
@@ -356,7 +356,7 @@ const MediaSchema = z.object({
       "Maximum input file size in bytes before reading the body. Default: 1 GB.",
     ),
   bodyTimeout: z.number().int().min(0).default(300_000).describe(
-    "Maximum time in milliseconds for the complete PUT /media request body transfer. 0 disables the deadline. Default: 300 000 ms.",
+    "Maximum idle time in milliseconds between chunks of a PUT /media request body. The timer resets whenever bytes arrive. 0 disables the timeout. Default: 300 000 ms.",
   ),
   tmpDir: z
     .string()
@@ -407,7 +407,7 @@ const MirrorSchema = z
       .min(0)
       .default(300_000)
       .describe(
-        "Timeout in milliseconds for the entire body transfer from the origin server after headers have been received. 0 disables the timeout. Default: 300 000 ms.",
+        "Maximum idle time in milliseconds between chunks received from the origin. The timer resets whenever bytes arrive, allowing large slow mirrors while rejecting stalled origins. 0 disables the timeout. Default: 300 000 ms.",
       ),
   })
   .transform((v) => {

@@ -103,6 +103,7 @@ async function handleJob(msg: JobMessage): Promise<void> {
   const { id, stream, tmpPath, xSha256, maxBytes } = msg;
 
   let file: Deno.FsFile | null = null;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 
   try {
     file = await Deno.open(tmpPath, {
@@ -113,7 +114,7 @@ async function handleJob(msg: JobMessage): Promise<void> {
 
     let totalSize = 0;
     const digest = sha256.create();
-    const reader = stream.getReader();
+    reader = stream.getReader();
     try {
       while (true) {
         const { done, value: chunk } = await reader.read();
@@ -130,6 +131,7 @@ async function handleJob(msg: JobMessage): Promise<void> {
       }
     } finally {
       reader.releaseLock();
+      reader = null;
     }
     file.close();
     file = null;
@@ -151,6 +153,12 @@ async function handleJob(msg: JobMessage): Promise<void> {
 
     self.postMessage({ id, hash, size: totalSize } satisfies JobSuccess);
   } catch (err) {
+    if (reader) {
+      await reader.cancel(err).catch(() => {});
+      reader.releaseLock();
+    } else if (!stream.locked) {
+      await stream.cancel(err).catch(() => {});
+    }
     try {
       file?.close();
     } catch { /* already closed */ }

@@ -145,7 +145,8 @@ upload:
   # Requests without Content-Length receive 411 Length Required.
   maxSize: 2147483648 # 2 GB
 
-  # Deadline (ms) for receiving the complete PUT /upload body. 0 disables it.
+  # Maximum idle time (ms) between body chunks. Resets whenever bytes arrive,
+  # so large slow uploads can exceed this total duration. 0 disables it.
   bodyTimeout: 300000
 
   # Number of upload worker threads.
@@ -185,9 +186,8 @@ mirror:
   # 0 = no timeout.
   connectTimeout: 30000
 
-  # Timeout (ms) for the full body transfer after headers have been received.
-  # 0 = no timeout (default — recommended for large blobs such as videos).
-  # Set a value only if you need a hard cap on total mirror duration.
+  # Maximum idle time (ms) between origin body chunks. Resets on progress, so
+  # large slow mirrors can exceed this total duration. 0 disables it.
   bodyTimeout: 300000
 
 # ---------------------------------------------------------------------------
@@ -266,7 +266,8 @@ media:
   # Maximum input file size in bytes before reading the body. Default: 1 GB.
   maxSize: 1073741824 # 1 GB
 
-  # Deadline (ms) for receiving the complete PUT /media body. 0 disables it.
+  # Maximum idle time (ms) between body chunks. Resets whenever bytes arrive,
+  # so large slow uploads can exceed this total duration. 0 disables it.
   bodyTimeout: 300000
 
   # Local directory for optimized media and thumbnail temp files before they are

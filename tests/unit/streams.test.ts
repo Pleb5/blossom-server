@@ -44,3 +44,32 @@ Deno.test("withBodyDeadline cancel releases the source", async () => {
   await assertRejects(() => deadline.stream.getReader().read());
   assertEquals(cancelled, true);
 });
+
+Deno.test("withBodyDeadline resets its timeout when bytes arrive", async () => {
+  let chunks = 0;
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      controller.enqueue(new Uint8Array([++chunks]));
+      if (chunks === 4) controller.close();
+    },
+  });
+  const deadline = withBodyDeadline(body, 40, "stalled");
+  const bytes = new Uint8Array(
+    await new Response(deadline.stream).arrayBuffer(),
+  );
+  assertEquals(bytes, new Uint8Array([1, 2, 3, 4]));
+});
+
+Deno.test("withBodyDeadline with timeout zero still cancels its source", async () => {
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const deadline = withBodyDeadline(body, 0, "unused");
+  deadline.cancel();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assertEquals(cancelled, true);
+});

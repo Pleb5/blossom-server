@@ -25,7 +25,7 @@
  *
  * Spam / overload protection layers:
  *   L1 — Pre-fetch pool check: no TCP connection opened when workers are full
- *   L2 — Fetch timeout (AbortSignal.timeout): hung origins release worker slots
+ *   L2 — Connect and body-idle timeouts: hung origins release worker slots
  *   L3 — Content-Length gate: 413 before any body bytes flow to the worker
  *   L4 — No-queue pool policy: dispatch() → null → 503, zero accumulation
  */
@@ -55,6 +55,7 @@ import {
   assertPublicMirrorUrl,
   fetchPinnedMirrorUrl,
 } from "../utils/mirror-url.ts";
+import { withBodyDeadline } from "../utils/streams.ts";
 
 /** BUD-02 Blob Descriptor (same shape as upload route) */
 interface BlobDescriptor {
@@ -73,18 +74,20 @@ const MAX_REDIRECTS = 5;
 async function fetchMirrorUrl(
   initialUrl: URL,
   connectTimeout: number,
+  signal: AbortSignal,
 ): Promise<Response> {
   let url = initialUrl;
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
     await assertPublicMirrorUrl(url);
 
     const controller = new AbortController();
+    const fetchSignal = AbortSignal.any([signal, controller.signal]);
     const timer = connectTimeout > 0
       ? setTimeout(() => controller.abort(), connectTimeout)
       : null;
     let response: Response;
     try {
-      response = await fetchPinnedMirrorUrl(url, controller.signal);
+      response = await fetchPinnedMirrorUrl(url, fetchSignal);
     } finally {
       if (timer !== null) clearTimeout(timer);
     }
@@ -115,27 +118,29 @@ export function buildMirrorRouter(
     const debugPrefix = `[mirror:${reqId}]`;
 
     if (!config.mirror.enabled) {
+      await ctx.req.raw.body?.cancel();
       debug(debugPrefix, "rejected: mirroring disabled");
       return errorResponse(ctx, 403, "Mirroring is disabled on this server");
     }
 
     let auth: ReturnType<typeof requireAuth> | undefined;
-    if (
-      config.mirror.requireAuth || requiresCommunityWhitelist(config, "write")
-    ) {
-      try {
+    try {
+      if (
+        config.mirror.requireAuth || requiresCommunityWhitelist(config, "write")
+      ) {
         auth = requireAuth(ctx, "upload");
-      } catch (err) {
-        const msg = err instanceof HTTPException ? err.message : String(err);
-        debug(debugPrefix, `rejected: auth failed — ${msg}`);
-        if (err instanceof HTTPException) {
-          return errorResponse(ctx, err.status as 401 | 403, err.message);
-        }
-        throw err;
+      } else {
+        // Auth is optional — capture it if present for owner registration
+        auth = optionalAuth(ctx, "upload");
       }
-    } else {
-      // Auth is optional — capture it if present for owner registration
-      auth = optionalAuth(ctx, "upload");
+    } catch (err) {
+      await ctx.req.raw.body?.cancel();
+      const msg = err instanceof HTTPException ? err.message : String(err);
+      debug(debugPrefix, `rejected: auth failed — ${msg}`);
+      if (err instanceof HTTPException) {
+        return errorResponse(ctx, err.status as 401 | 403, err.message);
+      }
+      throw err;
     }
 
     const accessError = await requireCommunityWhitelist(
@@ -207,10 +212,12 @@ export function buildMirrorRouter(
     );
     const t0 = Date.now();
     let originResponse: Response;
+    const originAbort = new AbortController();
     try {
       originResponse = await fetchMirrorUrl(
         mirrorUrl,
         config.mirror.connectTimeout,
+        originAbort.signal,
       );
       const t1 = Date.now();
       debug(
@@ -303,37 +310,22 @@ export function buildMirrorRouter(
       return errorResponse(ctx, 502, "Origin server returned an empty body");
     }
 
-    // Apply bodyTimeout: if configured, wrap the stream with an AbortController
-    // that fires after bodyTimeout ms. This is separate from connectTimeout so
-    // that large blobs are not aborted mid-stream by the connection timeout.
-    let bodyAbortTimer: ReturnType<typeof setTimeout> | null = null;
-    let streamForWorker: ReadableStream<Uint8Array> = body;
-
-    if (config.mirror.bodyTimeout > 0) {
-      const bodyAbort = new AbortController();
-      bodyAbortTimer = setTimeout(() => {
-        // Use a plain Error rather than DOMException: DOMException loses its
-        // message when the rejection crosses a Worker isolate boundary, arriving
-        // as Error { name: "Error", message: "" }. A plain Error survives intact.
-        bodyAbort.abort(
-          new Error(
-            `Body transfer from origin exceeded ${config.mirror.bodyTimeout}ms`,
-          ),
-        );
-      }, config.mirror.bodyTimeout);
-
-      // Pipe through a PassThrough that respects the abort signal so the worker
-      // receives an errored stream if the timer fires.
-      const { readable, writable } = new TransformStream<
-        Uint8Array,
-        Uint8Array
-      >();
-      body.pipeTo(writable, { signal: bodyAbort.signal }).catch(() => {});
-      streamForWorker = readable;
-    }
+    const deadline = withBodyDeadline(
+      body,
+      config.mirror.bodyTimeout,
+      `Mirror body made no progress for ${config.mirror.bodyTimeout}ms`,
+    );
+    const streamForWorker = deadline.stream;
 
     const pool = getPool();
-    const session = await storage.beginWrite(contentLength);
+    let session;
+    try {
+      session = await storage.beginWrite(contentLength);
+    } catch (err) {
+      deadline.cancel(err);
+      originAbort.abort(err);
+      throw err;
+    }
 
     debug(
       debugPrefix,
@@ -353,8 +345,8 @@ export function buildMirrorRouter(
     );
     if (!jobPromise) {
       // Race: another request claimed the last worker between step 6 and now.
-      if (bodyAbortTimer) clearTimeout(bodyAbortTimer);
-      await streamForWorker.cancel().catch(() => {});
+      deadline.cancel();
+      originAbort.abort(new Error("No upload worker available"));
       await storage.abortWrite(session).catch(() => {});
       debug(
         debugPrefix,
@@ -372,14 +364,15 @@ export function buildMirrorRouter(
     debug(debugPrefix, "awaiting worker result");
     try {
       ({ hash, size } = await jobPromise);
-      if (bodyAbortTimer) clearTimeout(bodyAbortTimer);
+      deadline.clear();
       debug(
         debugPrefix,
         `worker complete — hash=${hash.slice(0, 8)} size=${size}`,
       );
     } catch (err) {
       // Worker already deleted session.tmpPath on failure.
-      if (bodyAbortTimer) clearTimeout(bodyAbortTimer);
+      deadline.cancel(err);
+      originAbort.abort(err);
       await storage.abortWrite(session).catch(() => {});
       // DOMException (e.g. TimeoutError from AbortSignal) has a non-empty
       // .name but may have an empty .message — use name as fallback.
@@ -390,7 +383,7 @@ export function buildMirrorRouter(
       const isBodyTimeout = errName === "TimeoutError" &&
         config.mirror.bodyTimeout > 0;
       const msg = isBodyTimeout
-        ? `Body transfer from origin exceeded ${config.mirror.bodyTimeout}ms`
+        ? `Mirror body made no progress for ${config.mirror.bodyTimeout}ms`
         : errMsg || "Mirror failed";
       debug(debugPrefix, `worker error — ${msg}`);
       if (err instanceof WorkerJobError && err.errorType === "TOO_LARGE") {
@@ -475,6 +468,7 @@ export function buildMirrorRouter(
       const t3 = Date.now();
       debug(debugPrefix, `commitWrite complete elapsed=${t3 - t2}ms`);
     } catch (err) {
+      originAbort.abort(err);
       await storage.abortWrite(session).catch(() => {});
       throw err;
     }

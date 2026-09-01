@@ -30,7 +30,7 @@ export interface DeadlineStream {
   cancel: (reason?: unknown) => void;
 }
 
-/** Error a stream if its complete transfer takes longer than `timeoutMs`. */
+/** Error a stream if no bytes are received for `timeoutMs`. */
 export function withBodyDeadline(
   body: ReadableStream<Uint8Array>,
   timeoutMs: number,
@@ -45,12 +45,25 @@ export function withBodyDeadline(
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(new Error(message)),
-    timeoutMs,
+  let timer: ReturnType<typeof setTimeout>;
+  const armTimer = () => {
+    clearTimeout(timer);
+    timer = setTimeout(
+      () => controller.abort(new Error(message)),
+      timeoutMs,
+    );
+  };
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, streamController) {
+      armTimer();
+      streamController.enqueue(chunk);
+    },
+  });
+  armTimer();
+  body.pipeTo(writable, { signal: controller.signal }).then(
+    () => clearTimeout(timer),
+    () => clearTimeout(timer),
   );
-  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-  body.pipeTo(writable, { signal: controller.signal }).catch(() => {});
   return {
     stream: readable,
     clear: () => {
