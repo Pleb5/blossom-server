@@ -54,6 +54,9 @@ The server listens on port `3000` by default. Blob data and the SQLite database
 are stored in a named Docker volume (`data`). The config file is mounted
 read-only from the host.
 
+For production updates, host-specific Compose overrides, persistent-mount
+checks, and post-deployment verification, see [DEPLOYMENT.md](./DEPLOYMENT.md).
+
 ## Quick Start — From Source
 
 ```sh
